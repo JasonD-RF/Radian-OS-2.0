@@ -22,7 +22,3 @@ PyYAML>=6.0.1
 # Optional: faster serialization for HUD/telemetry (used in writer)
 msgpack>=1.0.8
 zstandard>=0.22.0
-
-# HUD server
-fastapi>=0.111.0
-uvicorn[standard]>=0.30.0

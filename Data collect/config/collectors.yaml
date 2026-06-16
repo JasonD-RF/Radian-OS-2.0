@@ -9,7 +9,6 @@
 # ---------------------------------------------------------------------------
 storage:
   dsn: "postgresql://radian:forge_local@localhost:5432/radian_forge"
-  postgres_dsn: "postgresql://radian:forge_local@localhost:5432/radian_forge"
   batch_size: 100
   flush_interval_s: 0.2
   spool_path: "./spool.db"
@@ -17,15 +16,6 @@ storage:
   queue_maxsize: 8192
   pool_min: 1
   pool_max: 4
-
-# ---------------------------------------------------------------------------
-# HUD server (FastAPI + uvicorn)
-# Opens the dashboard at http://localhost:8080
-# ---------------------------------------------------------------------------
-hud:
-  enabled: true
-  host: "0.0.0.0"
-  port: 8080
 
 # ---------------------------------------------------------------------------
 # OPC UA Robots

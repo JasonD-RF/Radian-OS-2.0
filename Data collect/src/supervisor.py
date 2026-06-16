@@ -22,14 +22,11 @@ from typing import List
 
 import yaml
 
-import uvicorn
-
 from .collectors.opc_collector import OpcCollector
 from .collectors.esp32_collector import Esp32Collector
 from .collectors.schneider_collector import SchneiderCollector
 from .collectors.base import BaseCollector
 from .storage.writer import BatchWriter
-from .hud.server import app as hud_app
 
 logger = logging.getLogger("supervisor")
 
@@ -107,31 +104,6 @@ async def _resilient(collector: BaseCollector, stop_event: asyncio.Event) -> Non
 # Main
 # ---------------------------------------------------------------------------
 
-async def _run_hud(hud_cfg: dict, dsn: str | None, stop_event: asyncio.Event) -> None:
-    """Run the FastAPI HUD server in the same event loop via uvicorn."""
-    host = hud_cfg.get("host", "0.0.0.0")
-    port = int(hud_cfg.get("port", 8080))
-    if dsn:
-        hud_app.state.dsn = dsn
-
-    config = uvicorn.Config(
-        app=hud_app,
-        host=host,
-        port=port,
-        log_level="warning",
-        loop="none",  # reuse our event loop
-    )
-    server = uvicorn.Server(config)
-
-    async def _wait_stop():
-        await stop_event.wait()
-        server.should_exit = True
-
-    asyncio.create_task(_wait_stop(), name="hud_stop_watcher")
-    logger.info("HUD server starting — http://%s:%d", host, port)
-    await server.serve()
-
-
 async def main(config_path: Path) -> None:
     cfg = yaml.safe_load(config_path.read_text())
     base_dir = config_path.resolve().parent
@@ -168,16 +140,6 @@ async def main(config_path: Path) -> None:
     ]
     tasks.append(asyncio.create_task(writer.run(), name="batch_writer"))
     tasks.append(asyncio.create_task(writer.run_spool_retry(), name="spool_retry"))
-
-    # HUD server — optional, enabled by default
-    hud_cfg = cfg.get("hud", {})
-    if hud_cfg.get("enabled", True):
-        dsn = storage_cfg.get("postgres_dsn")
-        tasks.append(
-            asyncio.create_task(
-                _run_hud(hud_cfg, dsn, stop_event), name="hud_server"
-            )
-        )
 
     logger.info(
         "Radian OS 2.0 Data Collect started — %d collectors, queue_maxsize=%d",
