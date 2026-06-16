@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from asyncua import Client, Node, ua
-from asyncua.common.subscription import SubHandler
 
 from .base import BaseCollector, DataRecord
 from ..clock import epoch_ns, now_ns
@@ -90,7 +89,7 @@ def _resolve_security_string(base_dir: Path, security_string: str, name: str) ->
 # Subscription handler
 # ---------------------------------------------------------------------------
 
-class _ChangeHandler(SubHandler):
+class _ChangeHandler:
     """
     asyncua subscription handler.
 
@@ -204,38 +203,6 @@ class OpcCollector(BaseCollector):
         self._reconnect_delay: float = float(cfg.get("reconnect_delay_s", 3.0))
         self._snap_interval: float = float(cfg.get("snapshot_interval_s", 5.0))
 
-    async def _connect(self, client: Client) -> None:
-        """Connect client with optional security and server-URI patching."""
-        try:
-            endpoints = await client.connect_and_get_server_endpoints()
-            server_uri = (
-                str(endpoints[0].Server.ApplicationUri or "").strip()
-                if endpoints else None
-            )
-        except Exception:
-            server_uri = None
-
-        if server_uri:
-            orig_create = client.uaclient.create_session
-
-            async def _patched_create(params):
-                params.ServerUri = server_uri
-                return await orig_create(params)
-
-            client.uaclient.create_session = _patched_create
-
-        if self._username:
-            client.set_user(self._username)
-        if self._password:
-            client.set_password(self._password)
-        if self._security:
-            await client.set_security_string(
-                _resolve_security_string(self._base_dir, self._security, self.device_id)
-            )
-
-        await client.connect()
-        logger.info("Connected %s  url=%s", self.device_id, self._url)
-
     async def run(self) -> None:
         self._running = True
         while self._running:
@@ -255,8 +222,19 @@ class OpcCollector(BaseCollector):
         timeout_s = float(self._cfg.get("timeout_s", 10.0))
         client = Client(url=self._url, timeout=timeout_s)
 
+        # Auth and security MUST be set before connect() is called.
+        # async with client: calls connect() in __aenter__, so configure first.
+        if self._username:
+            client.set_user(self._username)
+        if self._password:
+            client.set_password(self._password)
+        if self._security:
+            await client.set_security_string(
+                _resolve_security_string(self._base_dir, self._security, self.device_id)
+            )
+
         async with client:
-            await self._connect(client)
+            logger.info("Connected %s  url=%s", self.device_id, self._url)
 
             # Resolve NodeId objects for all configured variables
             nodes: List[Node] = []
