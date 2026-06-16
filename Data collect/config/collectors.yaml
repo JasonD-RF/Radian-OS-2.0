@@ -1,0 +1,267 @@
+# Radian OS 2.0 — Data Collect configuration
+# -------------------------------------------------
+# Copy this file to collectors.local.yaml and fill in real OPC node IDs.
+# collectors.local.yaml is gitignored — never commit credentials.
+# Run with: python -m src.supervisor --config config/collectors.local.yaml
+
+# ---------------------------------------------------------------------------
+# Storage / TimescaleDB
+# ---------------------------------------------------------------------------
+storage:
+  dsn: "postgresql://radian:forge_local@localhost:5432/radian_forge"
+  batch_size: 100
+  flush_interval_s: 0.2
+  spool_path: "./spool.db"
+  spool_retry_interval_s: 30.0
+  queue_maxsize: 8192
+  pool_min: 1
+  pool_max: 4
+
+# ---------------------------------------------------------------------------
+# OPC UA Robots
+# Each robot has a kuka endpoint and a fronius endpoint.
+# scalar_nodes maps your variable names to OPC UA NodeId strings.
+# Get NodeIds from WorkVisual or by browsing the controller OPC namespace.
+# ---------------------------------------------------------------------------
+robots:
+
+  # ── Chesty Cell (192.168.1.44 = KUKA, 192.168.1.193 = Fronius) ──────────
+  - id: chesty
+    kuka:
+      enabled: true
+      url: "opc.tcp://192.168.1.44:4840"
+      username: ""
+      password: ""
+      # Uncomment and fill in for KUKA Basic256Sha256 security:
+      # security_string: "Basic256Sha256,SignAndEncrypt,client_cert.pem,client_key.pem"
+      timeout_s: 10.0
+      publishing_interval_ms: 20     # server pushes changes every 20 ms
+      sampling_interval_ms: 0        # server samples at its fastest rate
+      queue_size: 10                 # server buffers up to 10 changes per node
+      reconnect_delay_s: 3.0
+      snapshot_interval_s: 5.0      # heartbeat even when nothing changes
+      scalar_nodes:
+        # ── Job state and startup flags (SOP Section 2) ──────────────────
+        gNewPrint:       "ns=2;s=ARCOS/gNewPrint"          # FILL IN real NodeId
+        gPrintComplete:  "ns=2;s=ARCOS/gPrintComplete"
+        gPrintResume:    "ns=2;s=ARCOS/gPrintResume"
+        gPrintActive:    "ns=2;s=ARCOS/gPrintActive"
+        gStopCycle:      "ns=2;s=ARCOS/gStopCycle"
+        gLastError:      "ns=2;s=ARCOS/gLastError"
+        # ── Layer and seam position variables ────────────────────────────
+        gNextLayer:      "ns=2;s=ARCOS/gNextLayer"
+        gActiveLayer:    "ns=2;s=ARCOS/gActiveLayer"
+        gNextSeam:       "ns=2;s=ARCOS/gNextSeam"
+        gActiveLayerSeam:"ns=2;s=ARCOS/gActiveLayerSeam"
+        gActiveTotalSeam:"ns=2;s=ARCOS/gActiveTotalSeam"
+        cSeamsInLayer:   "ns=2;s=ARCOS/cSeamsInLayer"
+        # ── Progress counters ────────────────────────────────────────────
+        gLayerCount:     "ns=2;s=ARCOS/gLayerCount"
+        gLayerSeamCount: "ns=2;s=ARCOS/gLayerSeamCount"
+        gTotalSeamCount: "ns=2;s=ARCOS/gTotalSeamCount"
+        # ── Seam-type one-shot latches ───────────────────────────────────
+        gFirstSeamCount:         "ns=2;s=ARCOS/gFirstSeamCount"
+        gLastSeamCount:          "ns=2;s=ARCOS/gLastSeamCount"
+        gOuterWallCount:         "ns=2;s=ARCOS/gOuterWallCount"
+        gInnerWallCount:         "ns=2;s=ARCOS/gInnerWallCount"
+        gInfillCount:            "ns=2;s=ARCOS/gInfillCount"
+        gSupportCount:           "ns=2;s=ARCOS/gSupportCount"
+        gSupportInterfaceCount:  "ns=2;s=ARCOS/gSupportInterfaceCount"
+        gSkinCount:              "ns=2;s=ARCOS/gSkinCount"
+        gBrimCount:              "ns=2;s=ARCOS/gBrimCount"
+        gInterpassCleaningCount: "ns=2;s=ARCOS/gInterpassCleaningCount"
+        # ── Layer-control request flags ──────────────────────────────────
+        gLayerRerun:         "ns=2;s=ARCOS/gLayerRerun"
+        gSkipLayer:          "ns=2;s=ARCOS/gSkipLayer"
+        gFirstSeamRerun:     "ns=2;s=ARCOS/gFirstSeamRerun"
+        gLastSeamRerun:      "ns=2;s=ARCOS/gLastSeamRerun"
+        gInterpassCleaning:  "ns=2;s=ARCOS/gInterpassCleaning"
+        # ── Seam-type enable flags ────────────────────────────────────────
+        gRerunOuterWall:         "ns=2;s=ARCOS/gRerunOuterWall"
+        gRerunInnerWall:         "ns=2;s=ARCOS/gRerunInnerWall"
+        gRerunInfill:            "ns=2;s=ARCOS/gRerunInfill"
+        gRerunSupport:           "ns=2;s=ARCOS/gRerunSupport"
+        gRerunSupportInterface:  "ns=2;s=ARCOS/gRerunSupportInterface"
+        gRerunSkin:              "ns=2;s=ARCOS/gRerunSkin"
+        gRerunBrim:              "ns=2;s=ARCOS/gRerunBrim"
+        # ── Per-layer active flags ────────────────────────────────────────
+        gDoOuterWallLayer:        "ns=2;s=ARCOS/gDoOuterWallLayer"
+        gDoInnerWallLayer:        "ns=2;s=ARCOS/gDoInnerWallLayer"
+        gDoInfillLayer:           "ns=2;s=ARCOS/gDoInfillLayer"
+        gDoSupportLayer:          "ns=2;s=ARCOS/gDoSupportLayer"
+        gDoSupportInterfaceLayer: "ns=2;s=ARCOS/gDoSupportInterfaceLayer"
+        gDoSkinLayer:             "ns=2;s=ARCOS/gDoSkinLayer"
+        gDoBrimLayer:             "ns=2;s=ARCOS/gDoBrimLayer"
+        # ── Interval variables ────────────────────────────────────────────
+        gFirstSeamRerunVar:          "ns=2;s=ARCOS/gFirstSeamRerunVar"
+        gFirstSeamLayerCount:        "ns=2;s=ARCOS/gFirstSeamLayerCount"
+        gLastSeamRerunVar:           "ns=2;s=ARCOS/gLastSeamRerunVar"
+        gLastSeamLayerCount:         "ns=2;s=ARCOS/gLastSeamLayerCount"
+        gInterpassCleaningVar:       "ns=2;s=ARCOS/gInterpassCleaningVar"
+        gOuterWallRerunVar:          "ns=2;s=ARCOS/gOuterWallRerunVar"
+        gOuterWallLayerCount:        "ns=2;s=ARCOS/gOuterWallLayerCount"
+        gInnerWallRerunVar:          "ns=2;s=ARCOS/gInnerWallRerunVar"
+        gInnerWallLayerCount:        "ns=2;s=ARCOS/gInnerWallLayerCount"
+        gInfillRerunVar:             "ns=2;s=ARCOS/gInfillRerunVar"
+        gInfillLayerCount:           "ns=2;s=ARCOS/gInfillLayerCount"
+        gSupportRerunVar:            "ns=2;s=ARCOS/gSupportRerunVar"
+        gSupportLayerCount:          "ns=2;s=ARCOS/gSupportLayerCount"
+        gSupportInterfaceRerunVar:   "ns=2;s=ARCOS/gSupportInterfaceRerunVar"
+        gSupportInterfaceLayerCount: "ns=2;s=ARCOS/gSupportInterfaceLayerCount"
+        gSkinRerunVar:               "ns=2;s=ARCOS/gSkinRerunVar"
+        gSkinLayerCount:             "ns=2;s=ARCOS/gSkinLayerCount"
+        gBrimRerunVar:               "ns=2;s=ARCOS/gBrimRerunVar"
+        gBrimLayerCount:             "ns=2;s=ARCOS/gBrimLayerCount"
+        # ── Motion / TCP state (from existing bridge) ─────────────────────
+        in_motion:          "ns=2;s=RAC/in_motion"
+        on_path:            "ns=2;s=RAC/on_path"
+        program_state:      "ns=2;s=RAC/program_state"
+        operational_mode:   "ns=2;s=RAC/operational_mode"
+        speed_override:     "ns=2;s=RAC/speed_override"
+        ov_act:             "ns=2;s=RAC/ov_act"
+        emergency_stop:     "ns=2;s=RAC/emergency_stop"
+        protective_stop:    "ns=2;s=RAC/protective_stop"
+        pyrometer_temp_c:   "ns=2;s=RAC/pyrometer_temp_c"
+        task_program_name:  "ns=2;s=RAC/task_program_name"
+        active_layer:       "ns=2;s=RAC/active_layer"
+        active_layer_seam:  "ns=2;s=RAC/active_layer_seam"
+        tcp_x:              "ns=2;s=RAC/tcp_x"
+        tcp_y:              "ns=2;s=RAC/tcp_y"
+        tcp_z:              "ns=2;s=RAC/tcp_z"
+        tcp_a:              "ns=2;s=RAC/tcp_a"
+        tcp_b:              "ns=2;s=RAC/tcp_b"
+        tcp_c:              "ns=2;s=RAC/tcp_c"
+
+    fronius:
+      enabled: true
+      url: "opc.tcp://192.168.1.193:4840"
+      username: ""
+      password: ""
+      timeout_s: 10.0
+      publishing_interval_ms: 50
+      sampling_interval_ms: 0
+      queue_size: 5
+      reconnect_delay_s: 3.0
+      snapshot_interval_s: 5.0
+      scalar_nodes:
+        current_a:      "ns=2;s=Welder/current_a"     # FILL IN real NodeId
+        voltage_v:      "ns=2;s=Welder/voltage_v"
+        power_w:        "ns=2;s=Welder/power_w"
+        wire_speed:     "ns=2;s=Welder/wire_speed"
+        gas_flow:       "ns=2;s=Welder/gas_flow"
+        process_active: "ns=2;s=Welder/process_active"
+        current_flow:   "ns=2;s=Welder/current_flow"
+        arc_stable:     "ns=2;s=Welder/arc_stable"
+        job_name:       "ns=2;s=Welder/job_name"
+        job_number:     "ns=2;s=Welder/job_number"
+        job_revision:   "ns=2;s=Welder/job_revision"
+        error_number:   "ns=2;s=Welder/error_number"
+        error_text:     "ns=2;s=Welder/error_text"
+
+  # ── Mattis Cell (192.168.1.151 = KUKA, 192.168.1.152 = Fronius) ─────────
+  - id: mattis
+    kuka:
+      enabled: true
+      url: "opc.tcp://192.168.1.151:4840"
+      username: ""
+      password: ""
+      timeout_s: 10.0
+      publishing_interval_ms: 20
+      sampling_interval_ms: 0
+      queue_size: 10
+      reconnect_delay_s: 3.0
+      snapshot_interval_s: 5.0
+      scalar_nodes:
+        # Same node structure as chesty — fill in actual NodeIds per controller
+        gNewPrint:        "ns=2;s=ARCOS/gNewPrint"
+        gPrintComplete:   "ns=2;s=ARCOS/gPrintComplete"
+        gPrintResume:     "ns=2;s=ARCOS/gPrintResume"
+        gPrintActive:     "ns=2;s=ARCOS/gPrintActive"
+        gStopCycle:       "ns=2;s=ARCOS/gStopCycle"
+        gLastError:       "ns=2;s=ARCOS/gLastError"
+        gNextLayer:       "ns=2;s=ARCOS/gNextLayer"
+        gActiveLayer:     "ns=2;s=ARCOS/gActiveLayer"
+        gNextSeam:        "ns=2;s=ARCOS/gNextSeam"
+        gActiveLayerSeam: "ns=2;s=ARCOS/gActiveLayerSeam"
+        gActiveTotalSeam: "ns=2;s=ARCOS/gActiveTotalSeam"
+        cSeamsInLayer:    "ns=2;s=ARCOS/cSeamsInLayer"
+        gLayerCount:      "ns=2;s=ARCOS/gLayerCount"
+        gLayerSeamCount:  "ns=2;s=ARCOS/gLayerSeamCount"
+        gTotalSeamCount:  "ns=2;s=ARCOS/gTotalSeamCount"
+        in_motion:        "ns=2;s=RAC/in_motion"
+        on_path:          "ns=2;s=RAC/on_path"
+        program_state:    "ns=2;s=RAC/program_state"
+        operational_mode: "ns=2;s=RAC/operational_mode"
+        speed_override:   "ns=2;s=RAC/speed_override"
+        emergency_stop:   "ns=2;s=RAC/emergency_stop"
+        protective_stop:  "ns=2;s=RAC/protective_stop"
+        pyrometer_temp_c: "ns=2;s=RAC/pyrometer_temp_c"
+        task_program_name:"ns=2;s=RAC/task_program_name"
+        tcp_x:            "ns=2;s=RAC/tcp_x"
+        tcp_y:            "ns=2;s=RAC/tcp_y"
+        tcp_z:            "ns=2;s=RAC/tcp_z"
+
+    fronius:
+      enabled: true
+      url: "opc.tcp://192.168.1.152:4840"
+      username: ""
+      password: ""
+      timeout_s: 10.0
+      publishing_interval_ms: 50
+      sampling_interval_ms: 0
+      queue_size: 5
+      reconnect_delay_s: 3.0
+      snapshot_interval_s: 5.0
+      scalar_nodes:
+        current_a:      "ns=2;s=Welder/current_a"
+        voltage_v:      "ns=2;s=Welder/voltage_v"
+        power_w:        "ns=2;s=Welder/power_w"
+        wire_speed:     "ns=2;s=Welder/wire_speed"
+        gas_flow:       "ns=2;s=Welder/gas_flow"
+        process_active: "ns=2;s=Welder/process_active"
+        current_flow:   "ns=2;s=Welder/current_flow"
+        arc_stable:     "ns=2;s=Welder/arc_stable"
+        job_name:       "ns=2;s=Welder/job_name"
+        job_number:     "ns=2;s=Welder/job_number"
+        job_revision:   "ns=2;s=Welder/job_revision"
+
+# ---------------------------------------------------------------------------
+# ESP32 at 192.168.1.169
+# ---------------------------------------------------------------------------
+esp32_devices:
+  - id: esp32_cell_sensor
+    enabled: true
+    base_url: "http://192.168.1.169"
+    endpoints:
+      - path: /data      # adjust to actual endpoint on your firmware
+        key_prefix: ""
+    poll_interval_s: 0.1
+    timeout_s: 2.0
+    reconnect_delay_s: 5.0
+
+# ---------------------------------------------------------------------------
+# Schneider Electric at 192.168.1.132 (Modbus TCP)
+# ---------------------------------------------------------------------------
+schneider_devices:
+  - id: schneider_plc
+    enabled: true
+    host: 192.168.1.132
+    port: 502
+    unit_id: 1
+    poll_interval_s: 0.1
+    timeout_s: 2.0
+    reconnect_delay_s: 5.0
+    registers:
+      holding:
+        - address: 0
+          count: 20
+          key_prefix: hr
+      input_registers:
+        - address: 0
+          count: 10
+          key_prefix: ir
+      coils:
+        - address: 0
+          count: 16
+          key_prefix: coil
+    scale_map: {}  # e.g. "hr.0": 0.1

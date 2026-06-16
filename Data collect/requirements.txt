@@ -1,0 +1,24 @@
+# Radian OS 2.0 — Data Collect dependencies
+# Install: pip install -r requirements.txt
+
+# OPC UA (KUKA + Fronius)
+asyncua>=1.1.0
+
+# PostgreSQL / TimescaleDB async driver
+asyncpg>=0.29.0
+
+# HTTP client for ESP32 + future REST endpoints
+aiohttp>=3.9.5
+
+# Modbus TCP for Schneider Electric PLC
+pymodbus>=3.6.8
+
+# Async SQLite for durable spool
+aiosqlite>=0.20.0
+
+# Config
+PyYAML>=6.0.1
+
+# Optional: faster serialization for HUD/telemetry (used in writer)
+msgpack>=1.0.8
+zstandard>=0.22.0

@@ -1,0 +1,39 @@
+# credentials and local overrides — never commit
+collectors.local.yaml
+*.local.yaml
+*.local.json
+
+# spool database
+spool.db
+spool.db-wal
+spool.db-shm
+
+# OPC UA certs
+client_cert.pem
+client_key.pem
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
