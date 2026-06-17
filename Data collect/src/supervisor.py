@@ -26,6 +26,7 @@ from .collectors.opc_collector import OpcCollector
 from .collectors.esp32_collector import Esp32Collector
 from .collectors.schneider_collector import SchneiderCollector
 from .collectors.base import BaseCollector
+from .collectors.log_handler import QueueLogHandler
 from .storage.writer import BatchWriter
 
 logger = logging.getLogger("supervisor")
@@ -111,6 +112,9 @@ async def main(config_path: Path) -> None:
     storage_cfg = cfg.get("storage", {})
     queue_maxsize = int(storage_cfg.get("queue_maxsize", 8192))
     record_queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
+
+    # Forward all INFO+ log records to the live browser dashboard
+    logging.getLogger().addHandler(QueueLogHandler(record_queue, level=logging.INFO))
 
     writer = BatchWriter(storage_cfg, record_queue)
     await writer.start()

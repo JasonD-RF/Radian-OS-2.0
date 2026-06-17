@@ -64,6 +64,7 @@ main { padding: 20px 24px; display: grid; gap: 20px; }
 }
 .badge-kuka    { background: #1a2f4a; color: var(--blue); }
 .badge-fronius { background: #3a2510; color: var(--orange); }
+.card-ts { font-size: 0.68rem; color: var(--dim); margin-left: auto; padding-left: 10px; font-variant-numeric: tabular-nums; }
 
 table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 td { padding: 5px 16px; border-bottom: 1px solid #1c2128; vertical-align: middle; }
@@ -84,7 +85,7 @@ section.log-section h2 {
 }
 #log {
   background: var(--card); border: 1px solid var(--border);
-  border-radius: 10px; height: 260px; overflow-y: auto;
+  border-radius: 10px; height: 200px; overflow-y: auto;
   font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 0.76rem;
 }
 .log-row {
@@ -100,6 +101,26 @@ section.log-section h2 {
 .l-key { color: var(--green); }
 .l-val { color: var(--text); }
 .l-hb  { color: #3a3f4a; font-style: italic; grid-column: 3 / 5; }
+
+#syslog {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; height: 200px; overflow-y: auto;
+  font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 0.76rem;
+}
+.syslog-row {
+  display: grid;
+  grid-template-columns: 95px 72px 140px 1fr;
+  padding: 3px 14px; border-bottom: 1px solid #1c2128; line-height: 1.7;
+}
+.syslog-row:hover { background: #1c2128; }
+.sl-ts     { color: var(--dim); }
+.sl-level  { font-weight: 700; }
+.sl-info   { color: var(--dim); }
+.sl-warn   { color: var(--yellow); }
+.sl-err    { color: var(--red); }
+.sl-crit   { color: var(--red); text-transform: uppercase; }
+.sl-logger { color: var(--blue); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-msg    { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -117,14 +138,16 @@ section.log-section h2 {
     <div class="card arc-off" id="card-chesty_kuka">
       <div class="card-head">
         <span class="card-name">chesty &mdash; KUKA</span>
-        <span class="badge badge-kuka">OPC UA · 28 nodes</span>
+        <span class="badge badge-kuka">OPC UA · 61 nodes</span>
+        <span class="card-ts" id="ts-chesty_kuka"></span>
       </div>
       <table id="tbl-chesty_kuka"></table>
     </div>
     <div class="card arc-off" id="card-mattis_kuka">
       <div class="card-head">
         <span class="card-name">mattis &mdash; KUKA</span>
-        <span class="badge badge-kuka">OPC UA · 28 nodes</span>
+        <span class="badge badge-kuka">OPC UA · 61 nodes</span>
+        <span class="card-ts" id="ts-mattis_kuka"></span>
       </div>
       <table id="tbl-mattis_kuka"></table>
     </div>
@@ -132,6 +155,7 @@ section.log-section h2 {
       <div class="card-head">
         <span class="card-name">chesty &mdash; Fronius</span>
         <span class="badge badge-fronius">OPC UA · 19 nodes</span>
+        <span class="card-ts" id="ts-chesty_fronius"></span>
       </div>
       <table id="tbl-chesty_fronius"></table>
     </div>
@@ -139,10 +163,16 @@ section.log-section h2 {
       <div class="card-head">
         <span class="card-name">mattis &mdash; Fronius</span>
         <span class="badge badge-fronius">OPC UA · 19 nodes</span>
+        <span class="card-ts" id="ts-mattis_fronius"></span>
       </div>
       <table id="tbl-mattis_fronius"></table>
     </div>
   </div>
+
+  <section class="log-section">
+    <h2>System Log</h2>
+    <div id="syslog"></div>
+  </section>
 
   <section class="log-section">
     <h2>Live Event Log</h2>
@@ -269,13 +299,14 @@ function renderTable(deviceId, values, changedKey) {
     const numKey = deviceId + ':' + k;
 
     if (ANALOG_KEYS.has(k) && typeof v === 'number') {
-      // For high-frequency analog keys apply a deadband — ignore servo noise.
+      // Deadband suppresses servo jitter on rapid OPC change events.
+      // On heartbeats (changedKey===null) bypass deadband so pyrometer and
+      // axis values always refresh with the latest snapshot every 5 seconds.
       const prev = lastNum[numKey];
-      if (prev !== undefined && Math.abs(v - prev) < DEADBAND) continue;
+      if (changedKey !== null && prev !== undefined && Math.abs(v - prev) < DEADBAND) continue;
       lastNum[numKey] = v;
       cell.textContent = fmt(v);
       cell.className   = vClass(v);
-      // No flash for continuously-changing analog values.
     } else {
       // For state/discrete keys: exact string comparison, flash on change.
       const text = fmt(v);
@@ -301,6 +332,22 @@ function renderTable(deviceId, values, changedKey) {
 // don't trigger a redundant re-render.
 const initialized = {};
 
+
+const syslogEl = document.getElementById('syslog');
+const LEVEL_CLASS = { INFO: 'sl-info', WARNING: 'sl-warn', ERROR: 'sl-err', CRITICAL: 'sl-crit' };
+function addSysLog(ts, level, values) {
+  const t = ts.split('T')[1]?.slice(0, 12) ?? ts;
+  const row = document.createElement('div');
+  row.className = 'syslog-row';
+  const lc = LEVEL_CLASS[level] || 'sl-info';
+  row.innerHTML =
+    `<span class="sl-ts">${t}</span>`
+    + `<span class="sl-level ${lc}">${level || ''}</span>`
+    + `<span class="sl-logger">${values.logger || ''}</span>`
+    + `<span class="sl-msg">${values.message || ''}</span>`;
+  syslogEl.prepend(row);
+  while (syslogEl.children.length > 200) syslogEl.removeChild(syslogEl.lastChild);
+}
 
 const logEl = document.getElementById('log');
 function addLog(ts, deviceId, changedKey, values) {
@@ -328,27 +375,52 @@ const dot   = document.getElementById('dot');
 const label = document.getElementById('conn-label');
 const cntEl = document.getElementById('event-count');
 
-const es = new EventSource('/events');
-es.onopen = () => { dot.className = 'dot live'; label.textContent = 'Live'; };
-es.onerror = () => { dot.className = 'dot dead'; label.textContent = 'Reconnecting…'; };
-es.onmessage = e => {
-  const d = JSON.parse(e.data);
-  snaps[d.device_id] = Object.assign(snaps[d.device_id] || {}, d.values);
+let es;
+let lastEventTime = Date.now();
 
-  // Always render on first paint (d.changed_key may be null for seed records).
-  // After that, skip heartbeats (changed_key === null) — the card is already
-  // up to date from individual change events and we don't want a mass DOM
-  // update every 5 seconds causing visible flicker on stable rows.
-  if (!initialized[d.device_id] || d.changed_key !== null) {
+function connectSSE() {
+  if (es) { try { es.close(); } catch (_) {} }
+  es = new EventSource('/events');
+  es.onopen  = () => { dot.className = 'dot live'; label.textContent = 'Live'; };
+  es.onerror = () => { dot.className = 'dot dead'; label.textContent = 'Reconnecting…'; };
+  es.onmessage = e => {
+    lastEventTime = Date.now();
+    const d = JSON.parse(e.data);
+    evCount++;
+    if (evCount % 10 === 0)
+      cntEl.textContent = evCount.toLocaleString() + ' events received';
+
+    if (d.device_id === 'system') {
+      addSysLog(d.ts, d.changed_key, d.values);
+      return;
+    }
+
+    snaps[d.device_id] = Object.assign(snaps[d.device_id] || {}, d.values);
     renderTable(d.device_id, snaps[d.device_id], d.changed_key);
     initialized[d.device_id] = true;
-  }
 
-  addLog(d.ts, d.device_id, d.changed_key, d.values);
-  evCount++;
-  if (evCount % 10 === 0)
-    cntEl.textContent = evCount.toLocaleString() + ' events received';
-};
+    const tsEl = document.getElementById('ts-' + d.device_id);
+    if (tsEl) tsEl.textContent = d.ts.split('T')[1]?.slice(0, 8) + ' UTC';
+
+    addLog(d.ts, d.device_id, d.changed_key, d.values);
+  };
+}
+
+connectSSE();
+
+// Watchdog: keepalive fires every 30s, so 45s with no event means the
+// connection is silently dead. Force a clean reconnect.
+setInterval(() => {
+  const stale = Date.now() - lastEventTime;
+  if (stale > 45000) {
+    lastEventTime = Date.now(); // reset before reconnect to avoid repeat fires
+    addSysLog(new Date().toISOString(), 'WARNING', {
+      logger: 'browser.watchdog',
+      message: `SSE silent for ${Math.round(stale / 1000)}s — reconnecting`,
+    });
+    connectSSE();
+  }
+}, 10000);
 </script>
 </body>
 </html>"""
@@ -359,7 +431,34 @@ es.onmessage = e => {
 # ---------------------------------------------------------------------------
 
 async def index(request: web.Request) -> web.Response:
-    return web.Response(text=_HTML, content_type="text/html")
+    return web.Response(
+        text=_HTML,
+        content_type="text/html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+async def health(request: web.Request) -> web.Response:
+    pool: asyncpg.Pool = request.app["pool"]
+    try:
+        rows = await pool.fetch("""
+            SELECT device_id, MAX(ts) AS latest
+            FROM radian_os.telemetry
+            WHERE ts > NOW() - INTERVAL '60 seconds'
+            GROUP BY device_id
+        """)
+        devices = {r["device_id"]: r["latest"].isoformat() for r in rows}
+        status = "ok" if len(devices) >= 4 else "degraded"
+        return web.Response(
+            text=json.dumps({"status": status, "devices": devices}),
+            content_type="application/json",
+        )
+    except Exception as exc:
+        return web.Response(
+            text=json.dumps({"status": "error", "error": str(exc)}),
+            content_type="application/json",
+            status=500,
+        )
 
 
 async def events(request: web.Request) -> web.StreamResponse:
@@ -373,14 +472,27 @@ async def events(request: web.Request) -> web.StreamResponse:
 
     pool: asyncpg.Pool = request.app["pool"]
 
-    # Seed with latest snapshot per device so the page populates immediately
+    # Latest snapshot per device (excluding system log records)
     seed = await pool.fetch("""
         SELECT DISTINCT ON (device_id)
             ts, device_id, source, changed_key, values::text AS vj
         FROM radian_os.telemetry
+        WHERE device_id != 'system'
         ORDER BY device_id, ts DESC
     """)
-    for row in seed:
+    # Last 50 system log entries, oldest-first so browser prepend puts newest on top
+    seed_logs = await pool.fetch("""
+        SELECT ts, device_id, source, changed_key, vj
+        FROM (
+            SELECT ts, device_id, source, changed_key, values::text AS vj
+            FROM radian_os.telemetry
+            WHERE device_id = 'system'
+            ORDER BY ts DESC
+            LIMIT 50
+        ) sub
+        ORDER BY ts ASC
+    """)
+    for row in list(seed) + list(seed_logs):
         payload = json.dumps({
             "ts": row["ts"].isoformat(),
             "device_id": row["device_id"],
@@ -391,6 +503,7 @@ async def events(request: web.Request) -> web.StreamResponse:
         await resp.write(f"data: {payload}\n\n".encode())
 
     last_ts = datetime.now(timezone.utc)
+    last_keepalive = datetime.now(timezone.utc)
 
     try:
         while True:
@@ -414,6 +527,12 @@ async def events(request: web.Request) -> web.StreamResponse:
                         "values": json.loads(row["vj"]),
                     })
                     await resp.write(f"data: {payload}\n\n".encode())
+            else:
+                # Keepalive comment every 30s — prevents firewall/browser idle timeout
+                now = datetime.now(timezone.utc)
+                if (now - last_keepalive).total_seconds() >= 30:
+                    await resp.write(b": keepalive\n\n")
+                    last_keepalive = now
     except (ConnectionResetError, asyncio.CancelledError):
         pass
 
@@ -429,6 +548,7 @@ async def create_app(dsn: str) -> web.Application:
     app = web.Application()
     app["pool"] = pool
     app.router.add_get("/", index)
+    app.router.add_get("/health", health)
     app.router.add_get("/events", events)
 
     async def _close(a: web.Application) -> None:
