@@ -156,6 +156,27 @@ class _ChangeHandler:
                 self._device_id, self._source,
             )
 
+    def force_refresh(self, fresh: Dict[str, Any]) -> None:
+        """Inject values from a direct OPC read and emit immediately.
+
+        Called by the periodic read loop so position/pyrometer data is always
+        captured even when the OPC server stops publishing during P_Stop,
+        interpass cleaning, or any other program pause.
+        """
+        self._snapshot.update(fresh)
+        record = DataRecord(
+            ts_epoch_ns=epoch_ns(),
+            ts_mono_ns=now_ns(),
+            device_id=self._device_id,
+            source=self._source,
+            changed_key=None,
+            values=dict(self._snapshot),
+        )
+        try:
+            self._queue.put_nowait(record)
+        except asyncio.QueueFull:
+            logger.warning("Queue full for %s — read-refresh skipped", self._device_id)
+
     def status_change_notification(self, status: ua.StatusChangeNotification) -> None:
         logger.warning(
             "Subscription status change on %s/%s: %s",
@@ -206,6 +227,7 @@ class OpcCollector(BaseCollector):
         self._queue_size: int = int(cfg.get("queue_size", 10))
         self._reconnect_delay: float = float(cfg.get("reconnect_delay_s", 3.0))
         self._snap_interval: float = float(cfg.get("snapshot_interval_s", 5.0))
+        self._read_interval: float = float(cfg.get("read_interval_s", 2.0))
 
     async def run(self) -> None:
         self._running = True
@@ -287,13 +309,20 @@ class OpcCollector(BaseCollector):
                 self._pub_interval, self._samp_interval, self._queue_size,
             )
 
-            # Periodic heartbeat — emit full snapshot even when idle
+            # Timers for heartbeat and direct read
             last_snap = now_ns()
-            snap_ns = int(self._snap_interval * 1e9)
+            snap_ns  = int(self._snap_interval * 1e9)
+            last_read = now_ns()
+            read_ns   = int(self._read_interval * 1e9)
+            last_good_read = now_ns()
+            read_stale_ns = int(10.0 * 1e9)  # force reconnect if no successful read for 10s
 
             while self._running:
                 await asyncio.sleep(0.1)
-                if (now_ns() - last_snap) >= snap_ns:
+                now = now_ns()
+
+                # Heartbeat: emit cached snapshot so DB always has recent data
+                if (now - last_snap) >= snap_ns:
                     snap = handler.snapshot
                     if snap:
                         self._emit(DataRecord(
@@ -301,10 +330,37 @@ class OpcCollector(BaseCollector):
                             ts_mono_ns=now_ns(),
                             device_id=self.device_id,
                             source=self._source,
-                            changed_key=None,   # periodic, not a change
+                            changed_key=None,
                             values=snap,
                         ))
                     last_snap = now_ns()
+
+                # Direct read: actively poll the OPC server for current values.
+                # Captures position/pyrometer during P_Stop and any other pause
+                # where the OPC server stops sending subscription notifications.
+                if (now - last_read) >= read_ns:
+                    try:
+                        raw = await asyncio.gather(
+                            *[n.read_value() for n in nodes],
+                            return_exceptions=True,
+                        )
+                        fresh = {
+                            key_map[str(n.nodeid)]: _coerce(v)
+                            for n, v in zip(nodes, raw)
+                            if not isinstance(v, Exception)
+                            and key_map.get(str(n.nodeid)) is not None
+                        }
+                        if fresh:
+                            handler.force_refresh(fresh)
+                            last_good_read = now_ns()
+                        elif (now - last_good_read) >= read_stale_ns:
+                            raise ConnectionError(
+                                f"{self.device_id}: all OPC reads failing for >10s — reconnecting"
+                            )
+                    except Exception as exc:
+                        logger.warning("%s: direct read error: %s", self.device_id, exc)
+                        raise
+                    last_read = now_ns()
 
             await subscription.unsubscribe(nodes)
             await subscription.delete()
