@@ -217,11 +217,25 @@ const DEVICE_ROWS = {
 };
 
 const snaps = {};
+// Last numeric value written to each cell — keyed as "deviceId:key"
+const lastNum = {};
 let evCount = 0;
+
+// Keys that carry high-frequency analog noise — deadband applies, no flash.
+const ANALOG_KEYS = new Set([
+  'a1','a2','a3','a4','a5','a6',
+  'tcp_x','tcp_y','tcp_z','tcp_a','tcp_b','tcp_c',
+  'pyrometer_temp_c','pyrometer_temp_raw_c',
+  'fan_speed_outside','fan_speed_inside','fan_speed_kpc',
+  'vel_cp','speed_override',
+]);
+// Minimum change required to update an analog cell (degrees / mm / RPM)
+const DEADBAND = 0.05;
 
 function fmt(v) {
   if (v === null || v === undefined) return '—';
-  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(3);
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
   return String(v);
 }
 
@@ -236,13 +250,44 @@ function renderTable(deviceId, values, changedKey) {
   const rows = DEVICE_ROWS[deviceId] || [];
   const tbl  = document.getElementById('tbl-' + deviceId);
   if (!tbl) return;
-  const frags = rows.map(([k, label]) => {
-    const v = values[k];
-    const changed = k === changedKey ? ' flash' : '';
-    const vc = vClass(v);
-    return `<tr><td>${label}</td><td class="${vc}${changed}">${fmt(v)}</td></tr>`;
-  });
-  tbl.innerHTML = frags.join('');
+
+  // First paint — build the table once, tag each row with data-key.
+  if (tbl.rows.length === 0) {
+    tbl.innerHTML = rows.map(([k, label]) => {
+      const v = values[k];
+      if (typeof v === 'number') lastNum[deviceId + ':' + k] = v;
+      return `<tr data-key="${k}"><td>${label}</td><td class="${vClass(v)}">${fmt(v)}</td></tr>`;
+    }).join('');
+    return;
+  }
+
+  // Subsequent updates: only touch the cells that actually need to change.
+  for (const row of tbl.rows) {
+    const k    = row.dataset.key;
+    const v    = values[k];
+    const cell = row.cells[1];
+    const numKey = deviceId + ':' + k;
+
+    if (ANALOG_KEYS.has(k) && typeof v === 'number') {
+      // For high-frequency analog keys apply a deadband — ignore servo noise.
+      const prev = lastNum[numKey];
+      if (prev !== undefined && Math.abs(v - prev) < DEADBAND) continue;
+      lastNum[numKey] = v;
+      cell.textContent = fmt(v);
+      cell.className   = vClass(v);
+      // No flash for continuously-changing analog values.
+    } else {
+      // For state/discrete keys: exact string comparison, flash on change.
+      const text = fmt(v);
+      if (cell.textContent === text) continue;
+      cell.textContent = text;
+      cell.className   = vClass(v);
+      if (k === changedKey) {
+        cell.classList.add('flash');
+        setTimeout(() => cell.classList.remove('flash'), 600);
+      }
+    }
+  }
 
   // Arc-on border for Fronius
   if (deviceId.includes('fronius')) {
@@ -251,6 +296,11 @@ function renderTable(deviceId, values, changedKey) {
     card.classList.toggle('arc-off', !values['process_active']);
   }
 }
+
+// Track which devices have had their initial paint so heartbeats
+// don't trigger a redundant re-render.
+const initialized = {};
+
 
 const logEl = document.getElementById('log');
 function addLog(ts, deviceId, changedKey, values) {
@@ -284,7 +334,16 @@ es.onerror = () => { dot.className = 'dot dead'; label.textContent = 'Reconnecti
 es.onmessage = e => {
   const d = JSON.parse(e.data);
   snaps[d.device_id] = Object.assign(snaps[d.device_id] || {}, d.values);
-  renderTable(d.device_id, snaps[d.device_id], d.changed_key);
+
+  // Always render on first paint (d.changed_key may be null for seed records).
+  // After that, skip heartbeats (changed_key === null) — the card is already
+  // up to date from individual change events and we don't want a mass DOM
+  // update every 5 seconds causing visible flicker on stable rows.
+  if (!initialized[d.device_id] || d.changed_key !== null) {
+    renderTable(d.device_id, snaps[d.device_id], d.changed_key);
+    initialized[d.device_id] = true;
+  }
+
   addLog(d.ts, d.device_id, d.changed_key, d.values);
   evCount++;
   if (evCount % 10 === 0)
