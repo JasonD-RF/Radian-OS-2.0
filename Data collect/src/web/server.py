@@ -152,20 +152,51 @@ section.log-section h2 {
 
 <script>
 const KUKA_ROWS = [
+  // -- Program / motion -------------------------------------------------------
   ['program_state',    'Program State'],
   ['in_motion',        'In Motion'],
   ['on_path',          'On Path'],
-  ['speed_override',   'Speed Override %'],
-  ['tcp_x',           'TCP X (mm)'],
-  ['tcp_y',           'TCP Y (mm)'],
-  ['tcp_z',           'TCP Z (mm)'],
+  ['speed_override',   'Speed Override'],
+  ['ov_pro',           'Program Override %'],
+  ['peri_rdy',         'Periphery Ready'],
+  ['drives_off',       'Drives Off'],
+  ['task_program_name','Program File'],
+  ['project_name',     'Project'],
+  // -- TCP position -----------------------------------------------------------
+  ['tcp_x','TCP X (mm)'], ['tcp_y','TCP Y (mm)'], ['tcp_z','TCP Z (mm)'],
+  // -- Joint axes -------------------------------------------------------------
   ['a1','A1°'], ['a2','A2°'], ['a3','A3°'],
   ['a4','A4°'], ['a5','A5°'], ['a6','A6°'],
+  // -- Pyrometer --------------------------------------------------------------
+  ['pyrometer_temp_c',    'Pyrometer Filt (°C)'],
+  ['pyrometer_temp_raw_c','Pyrometer Raw (°C)'],
+  // -- ArcTech print state (live when program running) -----------------------
+  ['print_active',     'Print Active'],
+  ['print_resume',     'Print Resume'],
+  ['print_complete',   'Print Complete'],
+  ['stop_cycle',       'Stop Cycle'],
+  ['new_print',        'New Print'],
   ['active_layer',     'Active Layer'],
+  ['next_layer',       'Next Layer'],
+  ['layer_count',      'Layer Count'],
   ['active_layer_seam','Layer Seam'],
-  ['pyrometer_temp_c', 'Pyrometer (°C)'],
-  ['task_program_name','Program File'],
+  ['next_seam',        'Next Seam'],
+  ['active_total_seam','Total Seam #'],
+  ['total_seam_count', 'Total Seams Done'],
+  ['seams_in_layer',   'Seams In Layer'],
+  ['layer_rerun',      'Layer Rerun'],
+  ['skip_layer',       'Skip Layer'],
+  ['interpass_cleaning','Interpass Clean'],
+  ['last_error',       'Last Error'],
+  ['vel_cp',           'Cart Vel (mm/s)'],
+  // -- Cabinet health ---------------------------------------------------------
+  ['fan_speed_outside','Fan Outside (RPM)'],
+  ['fan_speed_kpc',    'Fan KPC (RPM)'],
+  ['ups_state',        'UPS State'],
+  // -- Safety -----------------------------------------------------------------
   ['operational_mode', 'Op Mode'],
+  ['emergency_stop',   'E-Stop'],
+  ['protective_stop',  'Prot. Stop'],
 ];
 const FRONIUS_ROWS = [
   ['process_active',   'Arc On'],

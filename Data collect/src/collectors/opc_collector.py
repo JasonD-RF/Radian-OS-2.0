@@ -63,7 +63,11 @@ def _coerce(val: Any) -> Any:
         return val
     if isinstance(val, (list, tuple)):
         return [_coerce(v) for v in val]
-    # Try numeric coercion first (handles enums, single-field structs)
+    # ThreeDFrame (KUKA tool/base/TCP frames) → flat dict with X,Y,Z,A,B,C
+    if hasattr(val, "CartesianCoordinates") and hasattr(val, "Orientation"):
+        cc, o = val.CartesianCoordinates, val.Orientation
+        return {"x": cc.X, "y": cc.Y, "z": cc.Z, "a": o.A, "b": o.B, "c": o.C}
+    # Try numeric coercion (handles enums, single-field structs)
     try:
         return float(val)
     except (TypeError, ValueError, AttributeError):
