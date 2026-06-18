@@ -1,0 +1,148 @@
+# collectors.local.yaml.example
+#
+# Copy this file to collectors.local.yaml and fill in the values for your machine.
+# NEVER commit collectors.local.yaml — it contains credentials and machine-specific paths.
+#
+#   cp config/collectors.local.yaml.example config/collectors.local.yaml
+#
+# Cert paths must be ABSOLUTE paths (asyncua requirement).
+# On Linux:   /home/<user>/radian-forge/Data collect/client_cert.pem
+# On Windows: C:/Users/<user>/radian OS 2_0/Data collect/client_cert.pem
+
+storage:
+  dsn: "postgresql://radian:forge_local@localhost:5432/radian_forge"
+  batch_size: 50
+  flush_interval_s: 0.2
+  spool_path: "<ABSOLUTE_PATH_TO_REPO>/Data collect/spool.db"
+  spool_retry_interval_s: 30.0
+  pool_min: 1
+  pool_max: 3
+  queue_maxsize: 8192
+
+robots:
+  # ─── Robot cell 1 ────────────────────────────────────────────────────────────
+  - id: <cell_name>           # e.g. chesty — used as device_id prefix in telemetry
+    kuka:
+      enabled: true
+      url: "opc.tcp://<KUKA_KRC4_IP>:4840"
+      timeout_s: 10.0
+      username: "OpcUaObserver"
+      password: "<KUKA_OPC_PASSWORD>"   # default is "kuka"
+      security_string: "Basic256Sha256,SignAndEncrypt,<ABSOLUTE_PATH_TO_REPO>/Data collect/client_cert.pem,<ABSOLUTE_PATH_TO_REPO>/Data collect/client_key.pem"
+      reconnect_delay_s: 3.0
+      publishing_interval_ms: 20
+      sampling_interval_ms: 0
+      queue_size: 10
+      snapshot_interval_s: 5.0
+      scalar_nodes:
+        # TCP position
+        tcp_x: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$POS_ACT.CartesianCoordinates.X"
+        tcp_y: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$POS_ACT.CartesianCoordinates.Y"
+        tcp_z: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$POS_ACT.CartesianCoordinates.Z"
+        tcp_a: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$POS_ACT.Orientation.A"
+        tcp_b: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$POS_ACT.Orientation.B"
+        tcp_c: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$POS_ACT.Orientation.C"
+        # Joint axes
+        a1: "ns=9;s=5001.Robot.Axes.A1.ParameterSet.ActualPosition"
+        a2: "ns=9;s=5001.Robot.Axes.A2.ParameterSet.ActualPosition"
+        a3: "ns=9;s=5001.Robot.Axes.A3.ParameterSet.ActualPosition"
+        a4: "ns=9;s=5001.Robot.Axes.A4.ParameterSet.ActualPosition"
+        a5: "ns=9;s=5001.Robot.Axes.A5.ParameterSet.ActualPosition"
+        a6: "ns=9;s=5001.Robot.Axes.A6.ParameterSet.ActualPosition"
+        # Motion state
+        in_motion:      "ns=9;s=5001.Robot.ParameterSet.InMotion"
+        on_path:        "ns=9;s=5001.Robot.ParameterSet.OnPath"
+        in_control:     "ns=9;s=5001.Robot.ParameterSet.InControl"
+        speed_override: "ns=9;s=5001.Robot.ParameterSet.SpeedOverride"
+        # Program / interpreter
+        task_program_name: "ns=9;s=5104.Robot.ParameterSet.TaskProgramName"
+        program_state:     "ns=9;s=5104.Robot.ParameterSet.ProgramState"
+        # Safety
+        operational_mode: "ns=9;s=5005.SafetyState_1.ParameterSet.OperationalMode"
+        emergency_stop:   "ns=9;s=5005.SafetyState_1.ParameterSet.EmergencyStop"
+        protective_stop:  "ns=9;s=5005.SafetyState_1.ParameterSet.ProtectiveStop"
+        # KRL system variables
+        ov_act:     "ns=9;s=ns=8%3Bi=5004??krlvar:///System#$OV_ACT"
+        ov_pro:     "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$OV_PRO"
+        peri_rdy:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$PERI_RDY"
+        drives_off: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$DRIVES_OFF"
+        pro_state:  "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$PRO_STATE"
+        base_num:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$BASE_C"
+        tool_num:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$TOOL_C"
+        # Cabinet health
+        fan_speed_outside: "ns=9;s=5110.FanSpeedOutside"
+        fan_speed_inside:  "ns=9;s=5110.FanSpeedInside"
+        fan_speed_kpc:     "ns=9;s=5110.FanSpeedKpc"
+        ups_state:         "ns=9;s=5110.UpsState"
+        project_name:      "ns=9;s=5110.CurrentProjectName"
+        project_version:   "ns=9;s=5110.CurrentProjectVersion"
+        # Pyrometers
+        pyrometer_temp_c:     "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gPyroTempFiltC"
+        pyrometer_temp_raw_c: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gPyroTempRawC"
+        # ArcTech print-state globals
+        active_layer:      "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#GActiveLayer"
+        active_layer_seam: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#GActiveLayerSeam"
+        next_layer:        "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gNextLayer"
+        next_seam:         "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gNextSeam"
+        active_total_seam: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gActiveTotalSeam"
+        layer_count:       "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gLayerCount"
+        layer_seam_count:  "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gLayerSeamCount"
+        total_seam_count:  "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gTotalSeamCount"
+        seams_in_layer:    "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#cSeamsInLayer"
+        print_active:      "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gPrintActive"
+        print_resume:      "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gPrintResume"
+        new_print:         "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gNewPrint"
+        print_complete:    "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gPrintComplete"
+        stop_cycle:        "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gStopCycle"
+        layer_rerun:       "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gLayerRerun"
+        skip_layer:        "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gSkipLayer"
+        first_seam_rerun:  "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gFirstSeamRerun"
+        last_seam_rerun:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gLastSeamRerun"
+        interpass_cleaning: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gInterpassCleaning"
+        last_error:        "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gLastError"
+        do_outer_wall:     "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gDoOuterWallLayer"
+        do_brim:           "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gDoBrimLayer"
+        do_infill:         "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1/Global#gDoInfillLayer"
+        vel_cp:            "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$VEL.CP"
+        program_line:      "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$ACT_LINE"
+
+    fronius:
+      enabled: true
+      url: "opc.tcp://<FRONIUS_WELDER_IP>:4840"
+      timeout_s: 10.0
+      username: null
+      password: null
+      security_string: null
+      reconnect_delay_s: 3.0
+      publishing_interval_ms: 20
+      sampling_interval_ms: 0
+      queue_size: 5
+      snapshot_interval_s: 5.0
+      scalar_nodes:
+        voltage_v:           "ns=1;s=ACTUAL_VOLTAGE"
+        current_a:           "ns=1;s=ACTUAL_CURRENT"
+        wire_feed_mpm:       "ns=1;s=DISPLAY_WFS"
+        power_w:             "ns=1;s=DISPLAY_POWER"
+        job_number:          "ns=1;s=JOBNUMBER"
+        alarm:               "ns=1;s=ERROR"
+        process_active:      "ns=1;s=PROCESS_ACTIVE"
+        current_flow:        "ns=1;s=CURRENTFLOW"
+        arc_stable:          "ns=1;s=ARCSTABLE"
+        process_mainphase:   "ns=1;s=PROCESS_MAINPHASE"
+        display_status:      "ns=1;s=DISPLAY_STATUS"
+        safety_status:       "ns=1;s=SAFETY_STATUS"
+        seam_number:         "ns=1;s=SEAMNUMBER"
+        job_name:            "ns=1;s=JOBNAME"
+        job_revision:        "ns=1;s=JOBREVISION"
+        job_mode:            "ns=1;s=JOBMODE"
+        selected_processline: "ns=1;s=SELECTED_PROCESSLINE"
+        actual_weldingtime:  "ns=1;s=ACTUAL_WELDINGTIME"
+        total_wire_length:   "ns=1;s=TOTAL_WIRELENGTH"
+
+  # Add more robot cells here by copying the block above and changing id + IPs
+
+# ESP32 HTTP sensors (disabled until payload format confirmed)
+esp32_devices: []
+
+# Schneider PLC Modbus (disabled until register map confirmed)
+schneider_devices: []
