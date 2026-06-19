@@ -826,6 +826,7 @@ function clearLines() {
 function buildLines(pts) {
   clearLines();
   if (!pts.length) return;
+  const arcOnly = document.getElementById('tp-arc-only').checked;
   let segs = [], cur = { arc: pts[0].arc_on, pts: [pts[0]] };
   for (let i = 1; i < pts.length; i++) {
     if (pts[i].arc_on === cur.arc) { cur.pts.push(pts[i]); }
@@ -833,6 +834,7 @@ function buildLines(pts) {
   }
   segs.push(cur);
   for (const seg of segs) {
+    if (arcOnly && !seg.arc) continue;
     const v = new Float32Array(seg.pts.length * 3);
     seg.pts.forEach((p, i) => { const [x,y,z] = k2t(p.x,p.y,p.z); v[i*3]=x; v[i*3+1]=y; v[i*3+2]=z; });
     const geo = new THREE.BufferGeometry();
@@ -855,6 +857,7 @@ function fitCamera(pts) {
 }
 
 // ── Filtering ─────────────────────────────────────────────────────────────
+// Used for stats, TCP cone, scrubber — respects both tool and arc filters
 function filterPoints(pts) {
   const toolVal = document.getElementById('tp-tool').value;
   const arcOnly = document.getElementById('tp-arc-only').checked;
@@ -863,6 +866,11 @@ function filterPoints(pts) {
     if (toolVal !== '' && String(p.tool_num) !== toolVal) return false;
     return true;
   });
+}
+// Used for buildLines — tool filter only so arc transitions are preserved for segmentation
+function filterPointsForLines(pts) {
+  const toolVal = document.getElementById('tp-tool').value;
+  return toolVal !== '' ? pts.filter(p => String(p.tool_num) === toolVal) : pts;
 }
 
 function updateStats() {
@@ -917,7 +925,7 @@ async function selectJob(jobId, fit = true) {
 
   const pts = await fetchToolpath(jobId);
   allPoints = pts; populateToolSelect(pts);
-  buildLines(filterPoints(pts));
+  buildLines(filterPointsForLines(pts));
   if (fit && pts.length) fitCamera(pts);
   updateStats();
   overlay.style.display = 'none';
@@ -927,7 +935,7 @@ async function selectJob(jobId, fit = true) {
     lastLiveTs = pts.length ? pts.at(-1).ts : new Date(0).toISOString();
     startLive(jobId);
   } else {
-    playFiltered = filterPoints(pts);
+    playFiltered = filterPointsForLines(pts);
     showScrubber(playFiltered.length > 0);
   }
 }
@@ -949,7 +957,7 @@ function startLive(jobId) {
     if (newPts.length) {
       lastLiveTs = newPts.at(-1).ts;
       newPts.forEach(p => allPoints.push(p));
-      buildLines(filterPoints(allPoints));
+      buildLines(filterPointsForLines(allPoints));
       setLiveDot(filterPoints(allPoints).at(-1) ?? null);
       updateStats();
     }
@@ -964,7 +972,7 @@ function stopLive() {
 // ── Playback ──────────────────────────────────────────────────────────────
 function startPlayback() {
   if (!allPoints.length || isPlaying) return;
-  playFiltered = filterPoints(allPoints);
+  playFiltered = filterPointsForLines(allPoints);
   if (!playFiltered.length) return;
   if (playIndex >= playFiltered.length) { playIndex = 0; playDrawn = []; }
   isPlaying = true;
@@ -974,10 +982,12 @@ function startPlayback() {
     if (!isPlaying || playIndex >= playFiltered.length) {
       isPlaying = false;
       document.getElementById('tp-play').textContent = '▶ Play';
+      liveDot.visible = false;
       return;
     }
     playDrawn.push(playFiltered[playIndex]);
     buildLines(playDrawn);
+    setLiveDot(playFiltered[playIndex]);
     setScrubPos(playIndex, playFiltered.length);
     const dt = playFiltered[playIndex + 1]
       ? (new Date(playFiltered[playIndex + 1].ts) - new Date(playFiltered[playIndex].ts)) / speed : 0;
@@ -991,12 +1001,14 @@ function stopPlayback() {
   isPlaying = false;
   if (playTimer) { clearTimeout(playTimer); playTimer = null; }
   document.getElementById('tp-play').textContent = '▶ Play';
+  liveDot.visible = false;
 }
 
 function seekTo(idx) {
   playIndex = Math.max(0, Math.min(idx, playFiltered.length - 1));
   playDrawn = playFiltered.slice(0, playIndex + 1);
   buildLines(playDrawn);
+  setLiveDot(playFiltered[playIndex] ?? null);
   setScrubPos(playIndex, playFiltered.length);
 }
 
@@ -1012,14 +1024,14 @@ document.querySelectorAll('input[name="tp-mode"]').forEach(r => r.addEventListen
 }));
 function applyFilter() {
   if (getMode() === 'playback' && allPoints.length) {
-    playFiltered = filterPoints(allPoints);
+    playFiltered = filterPointsForLines(allPoints);
     playIndex = Math.min(playIndex, Math.max(0, playFiltered.length - 1));
     playDrawn = playFiltered.slice(0, playIndex + 1);
     buildLines(playDrawn);
     setScrubPos(playIndex, playFiltered.length);
     showScrubber(playFiltered.length > 0);
   } else {
-    buildLines(filterPoints(allPoints));
+    buildLines(filterPointsForLines(allPoints));
   }
   updateStats();
 }
@@ -1044,7 +1056,7 @@ scrubber.addEventListener('pointerup', () => {
 });
 scrubber.addEventListener('input', () => {
   if (!playFiltered.length) {
-    playFiltered = filterPoints(allPoints);
+    playFiltered = filterPointsForLines(allPoints);
     playDrawn = [];
   }
   if (!playFiltered.length) return;
@@ -1444,7 +1456,7 @@ def main() -> None:
         app = await create_app(dsn)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "localhost", args.port)
+        site = web.TCPSite(runner, "0.0.0.0", args.port)
         await site.start()
         print(f"\n  Radian OS 2.0 dashboard ->  http://localhost:{args.port}\n")
         await asyncio.Event().wait()  # run forever
