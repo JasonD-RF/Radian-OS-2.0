@@ -12,10 +12,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoDir    = Split-Path $ScriptDir -Parent
 $Config     = Join-Path $ScriptDir "config\collectors.local.yaml"
-$Python     = Join-Path $ScriptDir "venv\Scripts\python.exe"
+$Python     = Join-Path $RepoDir "venv\Scripts\python.exe"
 $LogDir     = Join-Path $ScriptDir "logs"
-$ComposeFile = Join-Path (Split-Path $ScriptDir -Parent) "docker-compose.yml"
+$ComposeFile = Join-Path $RepoDir "docker-compose.yml"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ function Check-Config {
 function Check-Venv {
     if (-not (Test-Path $Python)) {
         Write-Host "Creating Python virtual environment..."
-        python -m venv "$ScriptDir\venv"
+        python -m venv "$RepoDir\venv"
         & $Python -m pip install --quiet --upgrade pip
         & $Python -m pip install --quiet -r "$ScriptDir\requirements.txt"
         Write-Host "Venv ready."
@@ -65,6 +66,11 @@ function Apply-Schema {
     $schemaPath = Join-Path $ScriptDir "schema.sql"
     $wslSchema  = $schemaPath -replace "\\", "/" -replace "C:", "/mnt/c"
     wsl -d Ubuntu-24.04 -u root -- bash -c "docker exec -i radianos-db-1 psql -U radian -d radian_forge < '$wslSchema'"
+
+    Write-Host "Applying toolpath schema..."
+    $tpSchema = Join-Path $ScriptDir "schema_toolpath.sql"
+    $wslTp    = $tpSchema -replace "\\", "/" -replace "C:", "/mnt/c"
+    wsl -d Ubuntu-24.04 -u root -- bash -c "docker exec -i radianos-db-1 psql -U radian -d radian_forge < '$wslTp'"
 }
 
 function Get-ServicePid {
@@ -119,19 +125,33 @@ Apply-Schema
 
 Write-Host "Starting supervisor..."
 $sup = Start-Process -FilePath $Python `
-    -ArgumentList "-m", "src.supervisor", "--config", $Config `
+    -ArgumentList @("-m", "src.supervisor", "--config", "`"$Config`"") `
     -WorkingDirectory $ScriptDir `
-    -WindowStyle Normal `
+    -RedirectStandardOutput (Join-Path $LogDir "supervisor.log") `
+    -RedirectStandardError  (Join-Path $LogDir "supervisor.err") `
+    -WindowStyle Hidden `
     -PassThru
 Write-Host "  Supervisor PID: $($sup.Id)"
 
 Write-Host "Starting web server..."
 $web = Start-Process -FilePath $Python `
-    -ArgumentList "-m", "src.web.server", "--config", $Config `
+    -ArgumentList @("-m", "src.web.server", "--config", "`"$Config`"") `
     -WorkingDirectory $ScriptDir `
-    -WindowStyle Normal `
+    -RedirectStandardOutput (Join-Path $LogDir "webserver.log") `
+    -RedirectStandardError  (Join-Path $LogDir "webserver.err") `
+    -WindowStyle Hidden `
     -PassThru
 Write-Host "  Web server PID: $($web.Id)"
+
+Write-Host "Starting toolpath writer..."
+$tpw = Start-Process -FilePath $Python `
+    -ArgumentList @("-m", "src.toolpath.writer", "--config", "`"$Config`"") `
+    -WorkingDirectory $ScriptDir `
+    -RedirectStandardOutput (Join-Path $LogDir "toolpath.log") `
+    -RedirectStandardError  (Join-Path $LogDir "toolpath.err") `
+    -WindowStyle Hidden `
+    -PassThru
+Write-Host "  Toolpath writer PID: $($tpw.Id)"
 
 Start-Sleep -Seconds 3
 Show-Status

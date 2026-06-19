@@ -67,8 +67,8 @@ robots:
         peri_rdy:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$PERI_RDY"
         drives_off: "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$DRIVES_OFF"
         pro_state:  "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$PRO_STATE"
-        base_num:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$BASE_C"
-        tool_num:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$TOOL_C"
+        base_num:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$ACT_BASE"
+        tool_num:   "ns=9;s=ns=8%3Bi=5004??krlvar:///System/R1#$ACT_TOOL"
         # Cabinet health
         fan_speed_outside: "ns=9;s=5110.FanSpeedOutside"
         fan_speed_inside:  "ns=9;s=5110.FanSpeedInside"

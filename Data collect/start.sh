@@ -9,8 +9,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG="$SCRIPT_DIR/config/collectors.local.yaml"
-VENV="$SCRIPT_DIR/venv"
+VENV="$REPO_DIR/venv"
 PYTHON="$VENV/bin/python"
 SUPERVISOR_PID="$SCRIPT_DIR/logs/supervisor.pid"
 WEBSERVER_PID="$SCRIPT_DIR/logs/webserver.pid"
@@ -60,6 +61,8 @@ start_db() {
 apply_schema() {
     echo "Applying schema (safe to run on existing DB)..."
     docker exec -i radianos-db-1 psql -U radian -d radian_forge < "$SCRIPT_DIR/schema.sql"
+    echo "Applying toolpath schema..."
+    docker exec -i radianos-db-1 psql -U radian -d radian_forge < "$SCRIPT_DIR/schema_toolpath.sql"
 }
 
 stop_service() {
@@ -121,6 +124,11 @@ cmd_start() {
     "$PYTHON" -m src.web.server --config "$CONFIG" \
         >> "$SCRIPT_DIR/logs/webserver.log" 2>&1 &
     echo $! > "$WEBSERVER_PID"
+
+    echo "Starting toolpath writer..."
+    "$PYTHON" -m src.toolpath.writer --config "$CONFIG" \
+        >> "$SCRIPT_DIR/logs/toolpath.log" 2>&1 &
+    echo $! > "$SCRIPT_DIR/logs/toolpath.pid"
 
     sleep 2
     cmd_status
