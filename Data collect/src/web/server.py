@@ -8,15 +8,102 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import asyncpg
+import asyncua
 import yaml
 from aiohttp import web
 
 PORT = 8765
+
+
+def _krl_node_id(varname: str) -> list[str]:
+    b = "ns=9;s=ns=8%3Bi=5004??krlvar://"
+    if re.match(r'^[gGcC]', varname):
+        return [f"{b}/System/R1/Global#{varname}"]
+    # $-prefixed system vars: try R1 first, then System root (e.g. $OV_ACT lives there)
+    return [f"{b}/System/R1#{varname}", f"{b}/System#{varname}"]
+
+
+class KRLReader:
+    def __init__(self, url: str, username: str | None, password: str | None,
+                 security_string: str | None):
+        self._url = url
+        self._username = username
+        self._password = password
+        self._security_string = security_string
+        self._client: asyncua.Client | None = None
+        self._lock = asyncio.Lock()
+
+    async def _connect(self) -> asyncua.Client:
+        client = asyncua.Client(self._url, timeout=10)
+        if self._security_string:
+            await client.set_security_string(self._security_string)
+        if self._username:
+            client.set_user(self._username)
+            client.set_password(self._password or "")
+        await client.connect()
+        return client
+
+    async def _ensure(self) -> asyncua.Client:
+        if self._client is None:
+            self._client = await self._connect()
+        return self._client
+
+    async def _reset(self) -> None:
+        try:
+            if self._client:
+                await self._client.disconnect()
+        except Exception:
+            pass
+        self._client = None
+
+    async def read_var(self, varname: str):
+        async with self._lock:
+            last_exc = None
+            for attempt in range(2):
+                try:
+                    client = await self._ensure()
+                    for node_id in _krl_node_id(varname):
+                        try:
+                            return await client.get_node(node_id).read_value()
+                        except Exception:
+                            continue
+                    raise RuntimeError(f"Variable not found: {varname}")
+                except Exception as exc:
+                    last_exc = exc
+                    await self._reset()
+            raise last_exc
+
+    async def write_var(self, varname: str, raw_value: str) -> None:
+        async with self._lock:
+            client = await self._ensure()
+            for node_id in _krl_node_id(varname):
+                try:
+                    node = client.get_node(node_id)
+                    current = await node.read_value()
+                    if isinstance(current, bool):
+                        typed = raw_value.lower() in ('true', '1', 'yes')
+                    elif isinstance(current, int):
+                        typed = int(raw_value)
+                    elif isinstance(current, float):
+                        typed = float(raw_value)
+                    else:
+                        typed = raw_value
+                    await node.write_value(typed)
+                    return
+                except Exception:
+                    continue
+            raise RuntimeError(f"Variable not writable: {varname}")
+
+    async def close(self) -> None:
+        async with self._lock:
+            await self._reset()
+
 
 _HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -35,10 +122,27 @@ body { background: var(--bg); color: var(--text);
        font-family: 'Segoe UI', system-ui, sans-serif; }
 
 header {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 24px; border-bottom: 1px solid var(--border);
+  flex-direction: column; align-items: stretch; gap: 0;
+  padding: 0; border-bottom: 1px solid var(--border);
   background: var(--card); position: sticky; top: 0; z-index: 10;
+  display: flex;
 }
+.header-row {
+  display: flex; align-items: center; gap: 14px; padding: 14px 24px;
+}
+.machine-tabs {
+  display: flex; padding: 0 16px; gap: 2px;
+  border-top: 1px solid var(--border);
+}
+.tab-btn {
+  padding: 8px 18px; background: none; border: none;
+  border-bottom: 2px solid transparent; color: var(--dim);
+  font: inherit; font-size: 0.82rem; letter-spacing: 0.04em;
+  text-transform: uppercase; cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
 .logo { font-size: 1rem; font-weight: 700; color: var(--blue); letter-spacing: -0.02em; }
 .logo span { color: var(--dim); font-weight: 400; }
 #conn-status { margin-left: auto; font-size: 0.78rem; display: flex; align-items: center; gap: 6px; }
@@ -245,74 +349,58 @@ section.log-section h2 {
   padding: 9px 22px; border-radius: 7px; cursor: pointer; font-size: 0.85rem;
 }
 .tp-confirm-no:hover { background: #1a2f1a; }
+
+/* ── ArcTech Globals ─────────────────────────────────────────────────────── */
+.arctech-section h2 {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--dim); margin-bottom: 10px;
+}
+.arctech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.ag-tbl { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.ag-tbl td { padding: 4px 16px; border-bottom: 1px solid #1c2128; }
+.ag-tbl td:first-child { color: var(--dim); font-family: monospace; font-size: 0.78rem; width: 60%; }
+.ag-tbl td:last-child { font-variant-numeric: tabular-nums; }
+.ag-group td {
+  background: #0d1117; color: var(--dim); font-size: 0.68rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em; padding: 5px 16px;
+  border-top: 1px solid var(--border);
+}
+.ag-val-err { color: var(--red) !important; font-style: italic; font-size: 0.78rem; }
 </style>
-<script type="importmap">
-{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"}}
-</script>
+<script src="/static/vendor/three/build/three.r128.min.js"></script>
+<script src="/static/vendor/three/examples/js/controls/OrbitControls.r128.js"></script>
 </head>
 <body>
 <header>
-  <span class="logo">Radian OS <span>2.0</span></span>
-  <span id="event-count"></span>
-  <div id="conn-status">
-    <div class="dot" id="dot"></div>
-    <span id="conn-label">Connecting…</span>
+  <div class="header-row">
+    <span class="logo">Radian OS <span>2.0</span></span>
+    <span id="event-count"></span>
+    <div id="conn-status">
+      <div class="dot" id="dot"></div>
+      <span id="conn-label">Connecting…</span>
+    </div>
   </div>
+  <nav class="machine-tabs" id="machine-tabs">
+    <!-- populated by buildTabs() on page load -->
+  </nav>
 </header>
 
 <main>
   <div class="device-grid">
-    <div class="card arc-off" id="card-chesty_kuka">
-      <div class="card-head">
-        <span class="card-name">chesty &mdash; KUKA</span>
-        <span class="badge badge-kuka">OPC UA · 63 nodes</span>
-        <span class="card-ts" id="ts-chesty_kuka"></span>
-      </div>
-      <table id="tbl-chesty_kuka"></table>
-    </div>
-    <div class="card arc-off" id="card-mattis_kuka">
-      <div class="card-head">
-        <span class="card-name">mattis &mdash; KUKA</span>
-        <span class="badge badge-kuka">OPC UA · 63 nodes</span>
-        <span class="card-ts" id="ts-mattis_kuka"></span>
-      </div>
-      <table id="tbl-mattis_kuka"></table>
-    </div>
-    <div class="card arc-off" id="card-chesty_fronius">
-      <div class="card-head">
-        <span class="card-name">chesty &mdash; Fronius</span>
-        <span class="badge badge-fronius">OPC UA · 62 nodes</span>
-        <span class="card-ts" id="ts-chesty_fronius"></span>
-      </div>
-      <div id="frn-chesty_fronius" class="fronius-sections"></div>
-    </div>
-    <div class="card arc-off" id="card-mattis_fronius">
-      <div class="card-head">
-        <span class="card-name">mattis &mdash; Fronius</span>
-        <span class="badge badge-fronius">OPC UA · 62 nodes</span>
-        <span class="card-ts" id="ts-mattis_fronius"></span>
-      </div>
-      <div id="frn-mattis_fronius" class="fronius-sections"></div>
-    </div>
+    <!-- populated by buildDeviceGrid() on page load from MACHINES config -->
   </div>
+
+  <section class="arctech-section">
+    <h2>ArcTech Globals</h2>
+    <div class="arctech-grid" id="ag-grid">
+      <!-- populated by agRender() on page load -->
+    </div>
+  </section>
 
   <section class="frames-section">
     <h2>Active Coordinate Frames</h2>
     <div class="frames-grid">
-      <div class="frame-card">
-        <div class="frame-card-head">chesty</div>
-        <div class="frame-sub-head">Base Frame &nbsp;<span id="frame-base-num-chesty_kuka" class="frame-num-badge">—</span></div>
-        <table class="frame-table" id="btbl-chesty_kuka"></table>
-        <div class="frame-sub-head">Tool Frame &nbsp;<span id="frame-tool-num-chesty_kuka" class="frame-num-badge">—</span></div>
-        <table class="frame-table" id="ttbl-chesty_kuka"></table>
-      </div>
-      <div class="frame-card">
-        <div class="frame-card-head">mattis</div>
-        <div class="frame-sub-head">Base Frame &nbsp;<span id="frame-base-num-mattis_kuka" class="frame-num-badge">—</span></div>
-        <table class="frame-table" id="btbl-mattis_kuka"></table>
-        <div class="frame-sub-head">Tool Frame &nbsp;<span id="frame-tool-num-mattis_kuka" class="frame-num-badge">—</span></div>
-        <table class="frame-table" id="ttbl-mattis_kuka"></table>
-      </div>
+      <!-- populated by buildFramesGrid() on page load -->
     </div>
   </section>
 
@@ -320,13 +408,9 @@ section.log-section h2 {
     <div class="toolpath-header">
       <span class="toolpath-title">3D Toolpath Visualizer</span>
       <div class="toolpath-controls">
-        <select id="tp-robot" class="tp-select">
-          <option value="chesty_kuka">Chesty</option>
-          <option value="mattis_kuka">Mattis</option>
-        </select>
         <select id="tp-job" class="tp-select"><option value="">&#8212; select job &#8212;</option></select>
         <select id="tp-tool" class="tp-select"><option value="">All Tools</option></select>
-        <label class="tp-label"><input type="checkbox" id="tp-arc-only"> Weld only</label>
+        <span class="tp-label" style="gap:5px">Arc <select id="tp-arc-only" class="tp-select"><option value="">All</option><option value="true" selected>ON</option><option value="false">OFF</option></select></span>
         <label class="tp-label"><input type="checkbox" id="tp-grid" checked> Grid</label>
         <label class="tp-label"><input type="checkbox" id="tp-axes" checked> Origin</label>
         <label class="tp-label"><input type="checkbox" id="tp-tcp" checked> TCP</label>
@@ -352,7 +436,7 @@ section.log-section h2 {
     </div>
     <div id="tp-canvas-wrap">
       <canvas id="tp-canvas"></canvas>
-      <div id="tp-overlay">Select a robot and job to begin</div>
+      <div id="tp-overlay">Select a job to begin</div>
       <div id="tp-scrubber-wrap">
         <input type="range" id="tp-scrubber" min="0" max="1000" value="0" step="1">
       </div>
@@ -384,6 +468,26 @@ section.log-section h2 {
 </main>
 
 <script>
+/* Machine list injected at server startup from collectors.local.yaml.
+   Shape: [{id, label, kuka?, fronius?}] — only enabled devices included.
+   All builder functions derive from this; adding a robot to config is enough. */
+const MACHINES = __MACHINES__;
+
+// Active machine state — drives all show/hide and poll routing
+let currentMachine = MACHINES[0]?.id ?? null;
+let currentKukaId  = MACHINES.find(m => m.id === currentMachine)?.kuka ?? null;
+
+// Fast reverse lookup: device_id → machine id
+const DEVICE_TO_MACHINE = {};
+for (const m of MACHINES) {
+  if (m.kuka)    DEVICE_TO_MACHINE[m.kuka]    = m.id;
+  if (m.fronius) DEVICE_TO_MACHINE[m.fronius] = m.id;
+}
+
+// Per-machine event log buffers — newest first, max 300 entries each
+const machineEventLogs = {};
+for (const m of MACHINES) machineEventLogs[m.id] = [];
+
 const KUKA_ROWS = [
   // -- Program / motion -------------------------------------------------------
   ['program_state',    'Program State'],
@@ -509,9 +613,12 @@ const FRONIUS_SECTIONS = [
   ]},
 ];
 
-const DEVICE_ROWS = {
-  chesty_kuka: KUKA_ROWS, mattis_kuka: KUKA_ROWS,
-};
+/* Map kuka device-id → row schema. Built from MACHINES so new robots appear
+   automatically. All KUKA controllers share the same KUKA_ROWS schema. */
+const DEVICE_ROWS = {};
+for (const m of MACHINES) {
+  if (m.kuka) DEVICE_ROWS[m.kuka] = KUKA_ROWS;
+}
 
 function renderFronius(deviceId, values) {
   const container = document.getElementById('frn-' + deviceId);
@@ -666,6 +773,9 @@ function addSysLog(ts, level, values) {
 
 const logEl = document.getElementById('log');
 function addLog(ts, deviceId, changedKey, values) {
+  const machineId = DEVICE_TO_MACHINE[deviceId];
+  if (!machineId) return;
+
   const t = ts.split('T')[1]?.slice(0, 12) ?? ts;
   const isKuka = deviceId.includes('kuka');
   const devClass = isKuka ? 'kuka' : 'fronius';
@@ -682,8 +792,15 @@ function addLog(ts, deviceId, changedKey, values) {
       + `<span class="l-key">${changedKey}</span>`
       + `<span class="l-val">${val}</span>`;
   }
-  logEl.prepend(row);
-  while (logEl.children.length > 300) logEl.removeChild(logEl.lastChild);
+  // Buffer newest-first, cap at 300 per machine
+  const buf = machineEventLogs[machineId];
+  buf.unshift(row);
+  if (buf.length > 300) buf.pop();
+  // Only write to DOM if this machine's tab is currently active
+  if (machineId === currentMachine) {
+    logEl.prepend(row.cloneNode(true));
+    while (logEl.children.length > 300) logEl.removeChild(logEl.lastChild);
+  }
 }
 
 const dot   = document.getElementById('dot');
@@ -726,7 +843,196 @@ function connectSSE() {
   };
 }
 
+// ── ArcTech Globals ───────────────────────────────────────────────────────
+// 28 KRL globals polled every 2s directly from KUKA OPC UA via /api/krl-var
+const ARCTECH_GROUPS = [
+  { title: 'Print State',   vars: ['gPrintActive','gPrintComplete'] },
+  { title: 'Layer Control', vars: ['gLayerRerun','gSkipLayer','gtotal_planned_mm','gTotalLayers'] },
+  { title: 'Cleaning',      vars: ['gInterpassCleaning','gInterpassCleaningVar'] },
+  { title: 'Seam Reruns',   vars: ['gFirstSeamRerun','gFirstSeamRerunVar','gLastSeamRerun','gLastSeamRerunVar'] },
+  { title: 'Wall / Infill / Support / Skin / Brim', vars: [
+    'gRerunOuterWall','gOuterWallRerunVar','gRerunInnerWall','gInnerWallRerunVar',
+    'gRerunInfill','gInfillRerunVar','gRerunSupport','gSupportRerunVar',
+    'gRerunSupportInterface','gSuppInterfaceRerunVar','gRerunSkin','gSkinRerunVar',
+    'gRerunBrim','gBrimRerunVar',
+  ]},
+  { title: 'Process Params', vars: ['gTipLimit','gPyroSetPoint'] },
+];
+// Variables that are KRL BOOL — display TRUE/FALSE; all others are numeric
+const AG_BOOL = new Set([
+  'gPrintActive','gPrintComplete','gLayerRerun','gSkipLayer','gInterpassCleaning',
+  'gFirstSeamRerun','gLastSeamRerun','gRerunOuterWall','gRerunInnerWall','gRerunInfill',
+  'gRerunSupport','gRerunSupportInterface','gRerunSkin','gRerunBrim',
+]);
+
+/* Builds ArcTech Globals cards (one per KUKA machine) and fills each card's
+   tbody with variable rows keyed by ID. agPoll() updates cells every 2s. */
+function agRender() {
+  const grid = document.getElementById('ag-grid');
+  if (!grid) return;
+  grid.innerHTML = MACHINES.filter(m => m.kuka).map(m => `
+    <div class="card" data-machine="${m.id}">
+      <div class="card-head">
+        <span class="card-name">${m.label} &mdash; ArcTech</span>
+        <span class="badge badge-kuka">KRL Globals</span>
+      </div>
+      <table class="ag-tbl"><tbody id="ag-tbody-${m.kuka}"></tbody></table>
+    </div>`).join('');
+  for (const m of MACHINES.filter(m => m.kuka)) {
+    const tb = document.getElementById(`ag-tbody-${m.kuka}`);
+    if (!tb) continue;
+    let html = '';
+    for (const grp of ARCTECH_GROUPS) {
+      html += `<tr class="ag-group"><td colspan="2">${grp.title}</td></tr>`;
+      for (const v of grp.vars)
+        html += `<tr><td>${v}</td><td id="ag-${m.kuka}-${v}">…</td></tr>`;
+    }
+    tb.innerHTML = html;
+  }
+  grid.querySelectorAll('.card[data-machine]').forEach(el => {
+    el.style.display = el.dataset.machine === currentMachine ? '' : 'none';
+  });
+}
+
+// Last rendered text per "device:varname" — keeps stale value visible on poll failure
+const agState = {};
+
+/* Polls ArcTech globals for the currently visible machine only.
+   Cuts HTTP load vs polling all machines simultaneously. */
+async function agPoll() {
+  const m = MACHINES.find(m => m.id === currentMachine);
+  if (!m?.kuka) return;
+  const tasks = [];
+  for (const grp of ARCTECH_GROUPS) {
+    for (const varname of grp.vars) {
+      tasks.push(
+        fetch(`/api/krl-var?device=${m.kuka}&varname=${encodeURIComponent(varname)}`)
+          .then(r => r.json())
+          .then(j => {
+            if (j.error) return;
+            const cell = document.getElementById(`ag-${m.kuka}-${varname}`);
+            if (!cell) return;
+            const text = AG_BOOL.has(varname) ? (j.value ? 'TRUE' : 'FALSE') : fmt(j.value);
+            const cls  = AG_BOOL.has(varname) ? (j.value ? 'v-bool-true' : 'v-bool-false') : 'v-num';
+            const key  = `${m.kuka}:${varname}`;
+            if (agState[key] !== text) {
+              agState[key] = text;
+              cell.textContent = text;
+              cell.className   = cls;
+            }
+          })
+          .catch(() => {})
+      );
+    }
+  }
+  await Promise.allSettled(tasks);
+}
+
+/* Creates KUKA and Fronius device cards. Element IDs match what renderTable(),
+   renderFronius(), and renderFrames() look up — no changes to those functions. */
+function buildDeviceGrid() {
+  const grid = document.querySelector('.device-grid');
+  if (!grid) return;
+  let html = '';
+  for (const m of MACHINES) {
+    if (m.kuka) html += `
+      <div class="card arc-off" id="card-${m.kuka}" data-machine="${m.id}">
+        <div class="card-head">
+          <span class="card-name">${m.label} &mdash; KUKA</span>
+          <span class="badge badge-kuka">OPC UA &middot; 63 nodes</span>
+          <span class="card-ts" id="ts-${m.kuka}"></span>
+        </div>
+        <table id="tbl-${m.kuka}"></table>
+      </div>`;
+    if (m.fronius) html += `
+      <div class="card arc-off" id="card-${m.fronius}" data-machine="${m.id}">
+        <div class="card-head">
+          <span class="card-name">${m.label} &mdash; Fronius</span>
+          <span class="badge badge-fronius">OPC UA &middot; 62 nodes</span>
+          <span class="card-ts" id="ts-${m.fronius}"></span>
+        </div>
+        <div id="frn-${m.fronius}" class="fronius-sections"></div>
+      </div>`;
+  }
+  grid.innerHTML = html;
+  grid.querySelectorAll('.card[data-machine]').forEach(el => {
+    el.style.display = el.dataset.machine === currentMachine ? '' : 'none';
+  });
+}
+
+/* Creates Active Coordinate Frame cards (base + tool) for each KUKA machine.
+   IDs match renderFrames() targets: btbl-*, ttbl-*, frame-base-num-*, frame-tool-num-*. */
+function buildFramesGrid() {
+  const grid = document.querySelector('.frames-grid');
+  if (!grid) return;
+  grid.innerHTML = MACHINES.filter(m => m.kuka).map(m => `
+    <div class="frame-card" data-machine="${m.id}">
+      <div class="frame-card-head">${m.label}</div>
+      <div class="frame-sub-head">Base Frame &nbsp;<span id="frame-base-num-${m.kuka}" class="frame-num-badge">—</span></div>
+      <table class="frame-table" id="btbl-${m.kuka}"></table>
+      <div class="frame-sub-head">Tool Frame &nbsp;<span id="frame-tool-num-${m.kuka}" class="frame-num-badge">—</span></div>
+      <table class="frame-table" id="ttbl-${m.kuka}"></table>
+    </div>`).join('');
+  grid.querySelectorAll('.frame-card[data-machine]').forEach(el => {
+    el.style.display = el.dataset.machine === currentMachine ? '' : 'none';
+  });
+}
+
+/* Generates one tab button per machine. Clicking switches the active machine. */
+function buildTabs() {
+  const nav = document.getElementById('machine-tabs');
+  if (!nav) return;
+  nav.innerHTML = MACHINES.map(m =>
+    `<button class="tab-btn${m.id === currentMachine ? ' active' : ''}"
+             data-machine="${m.id}"
+             onclick="setMachine('${m.id}')">${m.label}</button>`
+  ).join('');
+}
+
+/* Switches the visible machine. Hides/shows cards, replaces event log,
+   and reloads the toolpath for the new machine. */
+function setMachine(id) {
+  const m = MACHINES.find(m => m.id === id);
+  if (!m) return;
+  currentMachine = id;
+  currentKukaId  = m.kuka ?? null;
+
+  // Update tab active indicator
+  document.querySelectorAll('.tab-btn[data-machine]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.machine === id);
+  });
+  // Show/hide device cards
+  document.querySelectorAll('.device-grid .card[data-machine]').forEach(el => {
+    el.style.display = el.dataset.machine === id ? '' : 'none';
+  });
+  // Show/hide frame cards
+  document.querySelectorAll('.frames-grid .frame-card[data-machine]').forEach(el => {
+    el.style.display = el.dataset.machine === id ? '' : 'none';
+  });
+  // Show/hide ArcTech cards
+  document.querySelectorAll('#ag-grid .card[data-machine]').forEach(el => {
+    el.style.display = el.dataset.machine === id ? '' : 'none';
+  });
+  // Repopulate Live Event Log from this machine's buffer (newest first)
+  logEl.innerHTML = '';
+  for (const row of (machineEventLogs[id] || []))
+    logEl.appendChild(row.cloneNode(true));
+  // Switch toolpath — functions live in second <script> block, always defined by click time
+  if (typeof stopLive === 'function') stopLive();
+  if (typeof stopPlayback === 'function') stopPlayback();
+  if (currentKukaId && typeof loadJobs === 'function') loadJobs(currentKukaId);
+}
+
+// ── Page initialisation ───────────────────────────────────────────────────
+// All builders run synchronously. SSE onmessage callbacks are event-loop
+// tasks and cannot fire until this entire script block completes — DOM is
+// always fully built before any data arrives.
+buildDeviceGrid();
+buildFramesGrid();
+agRender();
+buildTabs();
 connectSSE();
+setInterval(agPoll, 2000);
 
 // Watchdog: keepalive fires every 30s, so 45s with no event means the
 // connection is silently dead. Force a clean reconnect.
@@ -743,10 +1049,7 @@ setInterval(() => {
 }, 10000);
 </script>
 
-<script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
+<script>
 // ── Scene setup ───────────────────────────────────────────────────────────
 const canvas  = document.getElementById('tp-canvas');
 const wrap    = document.getElementById('tp-canvas-wrap');
@@ -760,7 +1063,7 @@ const scene  = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(50, 1, 1, 500000);
 camera.position.set(0, 2000, 3000);
 
-const controls = new OrbitControls(camera, canvas);
+const controls = new THREE.OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
@@ -770,11 +1073,12 @@ const grid = new THREE.GridHelper(10000, 20, 0x1c2128, 0x1c2128);
 scene.add(grid);
 
 // Live position marker — inverted cone at the robot's current TCP
+const CONE_H = 40;
 const liveDot = new THREE.Mesh(
-  new THREE.ConeGeometry(14, 40, 24),
+  new THREE.ConeGeometry(14, CONE_H, 24),
   new THREE.MeshBasicMaterial({ color: 0x457087 })
 );
-liveDot.rotation.x = Math.PI;   // tip points down toward workpiece
+liveDot.rotation.x = Math.PI;   // tip points in -Y (down toward workpiece)
 liveDot.visible = false;
 scene.add(liveDot);
 
@@ -793,7 +1097,12 @@ new ResizeObserver(resizeRenderer).observe(wrap);
 let allPoints    = [];
 let lineObjects  = [];
 let currentJobId = null;
-let liveTimer    = null;
+let liveTimer         = null;
+let liveJobPollTimer  = null;
+let liveLineGroup     = null;
+let _liveOpenLine     = null;
+let liveLastArcOn     = null;
+let liveSegPts        = [];
 let playTimer    = null;
 let lastLiveTs   = null;
 let isPlaying    = false;
@@ -814,8 +1123,8 @@ function showScrubber(show) { scrubberWrap.style.display = show ? 'block' : 'non
 const MAT_ARC   = new THREE.LineBasicMaterial({ color: 0x3fb950 });
 const MAT_RAPID = new THREE.LineBasicMaterial({ color: 0x2a4a6a });
 
-// KUKA world → Three.js (Y-up): kuka Z is height → three Y
-function k2t(x, y, z) { return [x, z, -y]; }
+// KUKA world → Three.js (Y-up): kuka Z is height → three Y, 180° around Y
+function k2t(x, y, z) { return [x, z, y]; }
 
 // ── Scene management ──────────────────────────────────────────────────────
 function clearLines() {
@@ -823,10 +1132,53 @@ function clearLines() {
   lineObjects = [];
 }
 
+function clearLiveLines() {
+  if (_liveOpenLine) { if (liveLineGroup) liveLineGroup.remove(_liveOpenLine); _liveOpenLine.geometry.dispose(); _liveOpenLine = null; }
+  if (liveLineGroup) { scene.remove(liveLineGroup); liveLineGroup.traverse(c => { if (c.geometry) c.geometry.dispose(); }); liveLineGroup = null; }
+  liveLastArcOn = null; liveSegPts = [];
+}
+
+function _flushLiveSeg() {
+  if (!liveSegPts.length) return;
+  if (!liveLineGroup) { liveLineGroup = new THREE.Group(); scene.add(liveLineGroup); }
+  const v = new Float32Array(liveSegPts.length * 3);
+  liveSegPts.forEach((p, i) => { const [x,y,z] = k2t(p.x,p.y,p.z); v[i*3]=x; v[i*3+1]=y; v[i*3+2]=z; });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(v, 3));
+  liveLineGroup.add(new THREE.Line(geo, liveLastArcOn ? MAT_ARC : MAT_RAPID));
+  liveSegPts = [];
+}
+
+function _renderOpenSeg() {
+  if (!liveSegPts.length) return;
+  if (!liveLineGroup) { liveLineGroup = new THREE.Group(); scene.add(liveLineGroup); }
+  if (_liveOpenLine) { liveLineGroup.remove(_liveOpenLine); _liveOpenLine.geometry.dispose(); _liveOpenLine = null; }
+  const v = new Float32Array(liveSegPts.length * 3);
+  liveSegPts.forEach((p, i) => { const [x,y,z] = k2t(p.x,p.y,p.z); v[i*3]=x; v[i*3+1]=y; v[i*3+2]=z; });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(v, 3));
+  _liveOpenLine = new THREE.Line(geo, liveLastArcOn ? MAT_ARC : MAT_RAPID);
+  liveLineGroup.add(_liveOpenLine);
+}
+
+function appendLiveLines(newPts) {
+  if (!newPts.length) return;
+  const toolVal   = document.getElementById('tp-tool').value;
+  const arcFilter = getArcFilter();
+  for (const p of newPts) {
+    if (toolVal !== '' && String(p.tool_num) !== toolVal) continue;
+    if (arcFilter !== '' && String(p.arc_on) !== arcFilter) continue;
+    if (liveLastArcOn === null) liveLastArcOn = p.arc_on;
+    if (p.arc_on !== liveLastArcOn) { _flushLiveSeg(); liveLastArcOn = p.arc_on; }
+    liveSegPts.push(p);
+  }
+  _renderOpenSeg();
+}
+
 function buildLines(pts) {
   clearLines();
   if (!pts.length) return;
-  const arcOnly = document.getElementById('tp-arc-only').checked;
+  const arcFilter = getArcFilter();
   let segs = [], cur = { arc: pts[0].arc_on, pts: [pts[0]] };
   for (let i = 1; i < pts.length; i++) {
     if (pts[i].arc_on === cur.arc) { cur.pts.push(pts[i]); }
@@ -834,7 +1186,7 @@ function buildLines(pts) {
   }
   segs.push(cur);
   for (const seg of segs) {
-    if (arcOnly && !seg.arc) continue;
+    if (arcFilter !== '' && String(seg.arc) !== arcFilter) continue;
     const v = new Float32Array(seg.pts.length * 3);
     seg.pts.forEach((p, i) => { const [x,y,z] = k2t(p.x,p.y,p.z); v[i*3]=x; v[i*3+1]=y; v[i*3+2]=z; });
     const geo = new THREE.BufferGeometry();
@@ -857,12 +1209,14 @@ function fitCamera(pts) {
 }
 
 // ── Filtering ─────────────────────────────────────────────────────────────
+function getArcFilter() { return document.getElementById('tp-arc-only').value; } // '' | 'true' | 'false'
+
 // Used for stats, TCP cone, scrubber — respects both tool and arc filters
 function filterPoints(pts) {
-  const toolVal = document.getElementById('tp-tool').value;
-  const arcOnly = document.getElementById('tp-arc-only').checked;
+  const toolVal   = document.getElementById('tp-tool').value;
+  const arcFilter = getArcFilter();
   return pts.filter(p => {
-    if (arcOnly && !p.arc_on) return false;
+    if (arcFilter !== '' && String(p.arc_on) !== arcFilter) return false;
     if (toolVal !== '' && String(p.tool_num) !== toolVal) return false;
     return true;
   });
@@ -917,11 +1271,11 @@ async function fetchToolpath(jobId, since) {
 
 async function selectJob(jobId, fit = true) {
   stopLive(); stopPlayback();
-  currentJobId = jobId; allPoints = []; clearLines();
+  currentJobId = jobId; allPoints = []; clearLines(); clearLiveLines();
   playFiltered = []; playIndex = 0; playDrawn = [];
   setScrubPos(0, 1);
   overlay.textContent = 'Loading…'; overlay.style.display = 'flex';
-  if (!jobId) { overlay.textContent = 'Select a robot and job to begin'; showScrubber(false); return; }
+  if (!jobId) { overlay.textContent = 'Select a job to begin'; showScrubber(false); return; }
 
   const pts = await fetchToolpath(jobId);
   allPoints = pts; populateToolSelect(pts);
@@ -945,7 +1299,7 @@ function setLiveDot(pt) {
   const tcpEnabled = document.getElementById('tp-tcp').checked;
   if (!pt || !tcpEnabled) { liveDot.visible = false; return; }
   const [x, y, z] = k2t(pt.x, pt.y, pt.z);
-  liveDot.position.set(x, y + 20, z);  // tip is 20mm below center; raise so tip = TCP point
+  liveDot.position.set(x, y + CONE_H / 2, z);  // cone center offset so tip lands exactly on TCP
   liveDot.visible = true;
 }
 
@@ -957,15 +1311,24 @@ function startLive(jobId) {
     if (newPts.length) {
       lastLiveTs = newPts.at(-1).ts;
       newPts.forEach(p => allPoints.push(p));
-      buildLines(filterPointsForLines(allPoints));
+      appendLiveLines(newPts);
       setLiveDot(filterPoints(allPoints).at(-1) ?? null);
       updateStats();
     }
-  }, 1000);
+  }, 200);
+  liveJobPollTimer = setInterval(async () => {
+    const robot = currentKukaId;
+    const jobs  = await fetch(`/api/jobs?robot_id=${encodeURIComponent(robot)}`).then(r=>r.json()).catch(()=>[]);
+    const active = jobs.find(j => j.status === 'active');
+    if (active && String(active.job_id) !== String(currentJobId)) {
+      await loadJobs(robot);
+    }
+  }, 5000);
 }
 
 function stopLive() {
-  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  if (liveTimer)        { clearInterval(liveTimer);        liveTimer        = null; }
+  if (liveJobPollTimer) { clearInterval(liveJobPollTimer); liveJobPollTimer = null; }
   liveDot.visible = false;
 }
 
@@ -1015,7 +1378,6 @@ function seekTo(idx) {
 function getMode() { return document.querySelector('input[name="tp-mode"]:checked')?.value ?? 'live'; }
 
 // ── Control wiring ────────────────────────────────────────────────────────
-document.getElementById('tp-robot').addEventListener('change', e => { stopLive(); stopPlayback(); loadJobs(e.target.value); });
 document.getElementById('tp-job').addEventListener('change', e => { if (e.target.value) selectJob(e.target.value); });
 document.querySelectorAll('input[name="tp-mode"]').forEach(r => r.addEventListener('change', () => {
   stopLive(); stopPlayback();
@@ -1031,6 +1393,7 @@ function applyFilter() {
     setScrubPos(playIndex, playFiltered.length);
     showScrubber(playFiltered.length > 0);
   } else {
+    clearLiveLines();
     buildLines(filterPointsForLines(allPoints));
   }
   updateStats();
@@ -1083,14 +1446,13 @@ document.getElementById('tp-confirm-yes').addEventListener('click', async () => 
   currentJobId = null; allPoints = []; clearLines();
   overlay.textContent = 'Job deleted.'; overlay.style.display = 'flex';
   document.getElementById('tp-stats').textContent = '';
-  const robot = document.getElementById('tp-robot').value;
-  await loadJobs(robot);
-  setTimeout(() => { if (overlay.textContent === 'Job deleted.') overlay.textContent = 'Select a robot and job to begin'; }, 2500);
+  await loadJobs(currentKukaId);
+  setTimeout(() => { if (overlay.textContent === 'Job deleted.') overlay.textContent = 'Select a job to begin'; }, 2500);
 });
 tpModal.addEventListener('click', e => { if (e.target === e.currentTarget) tpModal.style.display = 'none'; });
 
 // Initial load
-loadJobs(document.getElementById('tp-robot').value);
+if (currentKukaId) loadJobs(currentKukaId);
 </script>
 </body>
 </html>"""
@@ -1102,7 +1464,7 @@ loadJobs(document.getElementById('tp-robot').value);
 
 async def index(request: web.Request) -> web.Response:
     return web.Response(
-        text=_HTML,
+        text=request.app["html"],
         content_type="text/html",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
@@ -1421,13 +1783,77 @@ async def api_toolpath_csv(request: web.Request) -> web.StreamResponse:
 
 
 # ---------------------------------------------------------------------------
+# KRL variable read / write — direct OPC UA reads on demand
+# ---------------------------------------------------------------------------
+
+async def handle_krl_read(request: web.Request) -> web.Response:
+    device  = request.rel_url.query.get("device", "")
+    varname = request.rel_url.query.get("varname", "").strip()
+    readers: dict = request.app.get("krl_readers", {})
+    if not varname or device not in readers:
+        return web.json_response({"value": None, "error": "bad request"}, status=400)
+    try:
+        raw = await readers[device].read_var(varname)
+        # Preserve bool before int check (bool is subclass of int in Python)
+        jval = (bool(raw) if isinstance(raw, bool) else
+                int(raw)  if isinstance(raw, int)  else
+                float(raw) if isinstance(raw, float) else str(raw))
+        return web.json_response({"value": jval, "ts": datetime.now(timezone.utc).isoformat(), "error": None})
+    except Exception as exc:
+        return web.json_response({"value": None, "ts": datetime.now(timezone.utc).isoformat(), "error": str(exc)})
+
+
+async def handle_krl_write(request: web.Request) -> web.Response:
+    body    = await request.json()
+    device  = body.get("device", "")
+    varname = body.get("varname", "").strip()
+    value   = str(body.get("value", "")).strip()
+    readers: dict = request.app.get("krl_readers", {})
+    if not varname or device not in readers:
+        return web.json_response({"ok": False, "error": "bad request"}, status=400)
+    try:
+        await readers[device].write_var(varname, value)
+        return web.json_response({"ok": True, "error": None})
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
 # App factory + entrypoint
 # ---------------------------------------------------------------------------
 
-async def create_app(dsn: str) -> web.Application:
+async def create_app(dsn: str, cfg: dict) -> web.Application:
     pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
     app = web.Application()
     app["pool"] = pool
+
+    # One persistent OPC UA reader per enabled KUKA robot (on-demand KRL var reads)
+    krl_readers: dict[str, KRLReader] = {}
+    for robot in cfg.get("robots", []):
+        kuka = robot.get("kuka", {})
+        if kuka.get("enabled"):
+            krl_readers[f"{robot['id']}_kuka"] = KRLReader(
+                url=kuka["url"],
+                username=kuka.get("username"),
+                password=kuka.get("password"),
+                security_string=kuka.get("security_string"),
+            )
+    app["krl_readers"] = krl_readers
+
+    # Build machine descriptor list from config for frontend injection.
+    # Each entry: id, label, and optional kuka/fronius device-id strings.
+    # Only enabled devices appear — disabled ones are skipped entirely.
+    machines = []
+    for robot in cfg.get("robots", []):
+        m: dict[str, str] = {"id": robot["id"], "label": robot["id"].title()}
+        if robot.get("kuka", {}).get("enabled"):
+            m["kuka"] = f"{robot['id']}_kuka"
+        if robot.get("fronius", {}).get("enabled"):
+            m["fronius"] = f"{robot['id']}_fronius"
+        machines.append(m)
+    # Pre-render once at startup — index handler just returns this string each request
+    app["html"] = _HTML.replace("__MACHINES__", json.dumps(machines))
+
     app.router.add_get("/", index)
     app.router.add_get("/health", health)
     app.router.add_get("/events", events)
@@ -1436,9 +1862,14 @@ async def create_app(dsn: str) -> web.Application:
     app.router.add_get("/api/toolpath/{job_id}/live", api_toolpath_live)
     app.router.add_get("/api/toolpath/{job_id}/export.csv", api_toolpath_csv)
     app.router.add_get("/api/toolpath/{job_id}", api_toolpath)
+    app.router.add_get("/api/krl-var",  handle_krl_read)
+    app.router.add_post("/api/krl-var", handle_krl_write)
+    app.router.add_static("/static", Path(__file__).parent.parent.parent / "static")
 
     async def _close(a: web.Application) -> None:
         await a["pool"].close()
+        for reader in a["krl_readers"].values():
+            await reader.close()
     app.on_shutdown.append(_close)
     return app
 
@@ -1453,7 +1884,7 @@ def main() -> None:
     dsn = cfg["storage"]["dsn"]
 
     async def _run() -> None:
-        app = await create_app(dsn)
+        app = await create_app(dsn, cfg)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", args.port)

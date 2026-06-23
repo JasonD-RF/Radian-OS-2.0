@@ -160,7 +160,7 @@ class ToolpathWriter:
     def __init__(self, cfg: dict):
         storage = cfg.get("storage", {})
         self._dsn: str = storage["dsn"]
-        self._poll_interval: float = float(cfg.get("toolpath", {}).get("poll_interval_s", 0.1))
+        self._poll_interval: float = float(cfg.get("toolpath", {}).get("poll_interval_s", 0.05))
         self._dedup_mm: float = float(cfg.get("toolpath", {}).get("dedup_mm", 0.5))
         self._resume_window_h: int = int(cfg.get("toolpath", {}).get("resume_window_h", 24))
         self._conn: asyncpg.Connection | None = None
@@ -282,11 +282,16 @@ class ToolpathWriter:
         if cell.points_this_session > 0 and dist < self._dedup_mm:
             return
 
-        # Get Fronius state for arc metadata
+        # Get Fronius state — stale guard: data older than 30s means arc is off
         fronius_row = await self._latest(cell.fronius_id)
-        fv: dict = fronius_row["values"] if fronius_row else {}
+        fv: dict = {}
+        if fronius_row is not None:
+            f_ts = fronius_row["ts"]
+            f_ts_utc = f_ts if f_ts.tzinfo else f_ts.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - f_ts_utc).total_seconds() < 30.0:
+                fv = fronius_row["values"]
 
-        arc_on = _b(fv, "process_active")
+        arc_on = _b(fv, "current_flow")
         seam_number = _i(fv, "seam_number")
 
         await self._conn.execute(
