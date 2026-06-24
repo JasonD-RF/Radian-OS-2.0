@@ -80,10 +80,15 @@ function Get-ServicePid {
 }
 
 function Stop-Services {
-    Write-Host "Stopping supervisor and web server..."
-    Get-Process -Name "python" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*src.supervisor*" -or $_.CommandLine -like "*src.web.server*" } |
-        Stop-Process -Force -ErrorAction SilentlyContinue
+    Write-Host "Stopping all Radian OS services..."
+    # Get-Process doesn't expose CommandLine in PS 5.1 — use CIM instead
+    $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+        Where-Object { $_.CommandLine -like "*radian OS 2_0*" }
+    if (-not $procs) { Write-Host "No Radian OS processes found."; return }
+    foreach ($p in $procs) {
+        Write-Host "  Stopping PID $($p.ProcessId)"
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "Services stopped."
 }
 
@@ -95,7 +100,7 @@ function Show-Status {
     Write-Host "`n=== Python Services ===" -ForegroundColor Cyan
     $pythonProcs = Get-Process -Name "python" -ErrorAction SilentlyContinue
     if ($pythonProcs) {
-        $pythonProcs | ForEach-Object { Write-Host "  PID $($_.Id) — $($_.Path)" }
+        $pythonProcs | ForEach-Object { Write-Host "  PID $($_.Id) - $($_.Path)" }
     } else {
         Write-Host "  (no python processes running)"
     }

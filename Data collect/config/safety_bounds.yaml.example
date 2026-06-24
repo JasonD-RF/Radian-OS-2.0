@@ -1,0 +1,122 @@
+# safety_bounds.yaml.example
+# Copy to safety_bounds.yaml and fill in values for your cell.
+# This file defines the allowed parameter ranges for any AI-initiated OPC UA writes.
+# The future Action API (POST /api/opc-write) will validate all writes against these bounds
+# before passing them to KRLReader. Writes outside bounds are rejected and logged.
+#
+# Copy: copy config\safety_bounds.yaml.example config\safety_bounds.yaml
+# Note: safety_bounds.yaml is committed (not gitignored) — these are engineering limits, not secrets.
+
+# ─────────────────────────────────────────────
+# Global Safety Switch
+# ─────────────────────────────────────────────
+ai_control_enabled: false
+# Set to true to allow the edge AI agent to make writes.
+# When false, all POST /api/opc-write and POST /api/config requests from the AI are rejected.
+# Human operators can still write via the dashboard UI regardless of this flag.
+
+# ─────────────────────────────────────────────
+# Per-Robot Parameter Bounds
+# ─────────────────────────────────────────────
+robots:
+  - id: chesty
+    kuka:
+      speed_override_pct:
+        min: 10
+        max: 100
+        default: 100
+        unit: percent
+        note: "$OV_PRO — program speed override. Never set below 10 (loss of control authority)."
+
+      # Boolean process control flags — only true/false allowed, no range needed
+      boolean_flags:
+        - gStopCycle       # clean stop at end of current seam
+        - gSkipLayer       # skip current layer
+        - gLayerRerun      # rerun current layer from start
+        - gFirstSeamRerun  # rerun first seam only
+        - gLastSeamRerun   # rerun last seam only
+        - gInterpassCleaning  # trigger interpass cleaning
+
+    fronius:
+      # Fronius weld parameter bounds (values via Fronius OPC UA namespace)
+      # NodeIds from discovered_fronius_*.txt — fill in when Fronius write path is implemented
+      weld_current_a:
+        min: 50
+        max: 350
+        default: 200
+        unit: amps
+        note: "Never exceed 350A without checking wire/gas configuration."
+
+      wire_feed_rate_m_per_min:
+        min: 2.0
+        max: 12.0
+        default: 6.0
+        unit: m/min
+        note: "Exceeding 12 m/min risks wire burn-back. Stay within wire feeder spec."
+
+      arc_voltage_v:
+        min: 14.0
+        max: 32.0
+        default: 22.0
+        unit: volts
+        note: "Adjust in concert with wire feed — voltage and current are coupled."
+
+      # NOTE: Fronius OPC UA node IDs for write are not yet cataloged.
+      # Refer to discovered_fronius_192.168.1.152_4840.txt and run discover_fronius.py
+      # to find the correct NodeIds before implementing Fronius writes.
+
+  - id: mattis
+    kuka:
+      speed_override_pct:
+        min: 10
+        max: 100
+        default: 100
+        unit: percent
+
+      boolean_flags:
+        - gStopCycle
+        - gSkipLayer
+        - gLayerRerun
+        - gFirstSeamRerun
+        - gLastSeamRerun
+        - gInterpassCleaning
+
+    fronius:
+      weld_current_a:
+        min: 50
+        max: 350
+        default: 200
+        unit: amps
+
+      wire_feed_rate_m_per_min:
+        min: 2.0
+        max: 12.0
+        default: 6.0
+        unit: m/min
+
+      arc_voltage_v:
+        min: 14.0
+        max: 32.0
+        default: 22.0
+        unit: volts
+
+# ─────────────────────────────────────────────
+# Config Patch Allowlist
+# ─────────────────────────────────────────────
+# Fields in collectors.local.yaml the edge AI is permitted to modify via POST /api/config.
+# Any field not listed here is read-only to the AI.
+config_patch_allowlist:
+  - "toolpath.dedup_mm"
+  - "toolpath.poll_interval_s"
+  - "toolpath.resume_window_h"
+  # Do NOT allow: storage.dsn, robots[].kuka.url, robots[].fronius.url,
+  # security_string, any cert paths, enabled flags (human decision only)
+
+# ─────────────────────────────────────────────
+# Audit Log
+# ─────────────────────────────────────────────
+audit_log:
+  enabled: true
+  # When the Action API is implemented, every AI-initiated write will be logged to
+  # radian_os.ai_audit_log in TimescaleDB with: timestamp, robot_id, parameter, before, after, outcome.
+  # Schema will be added to schema.sql when the Action API is built (Layer 3).

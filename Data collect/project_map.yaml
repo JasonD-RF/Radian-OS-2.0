@@ -1,0 +1,306 @@
+# Radian OS 2.0 — Project Map
+# Machine-readable index for AI-assisted development and edge AI agents.
+# Read this file first to orient in the codebase before reading individual CLAUDE.md files.
+
+project: "Radian OS 2.0"
+root: "Data collect/"
+repo: "JasonD-RF/Radian-OS-2.0"
+description: "Manufacturing data OS for robotic arc welding cells. Collects OPC UA telemetry from KUKA robots and Fronius welders, stores in TimescaleDB, and streams live to a browser dashboard."
+
+# ─────────────────────────────────────────────
+# Runtime Processes
+# ─────────────────────────────────────────────
+processes:
+  - name: supervisor
+    entry: src/supervisor.py
+    module: src.supervisor
+    command: "python -m src.supervisor --config config/collectors.local.yaml"
+    purpose: "Runs all data collectors and the BatchWriter; restart guard on every collector task"
+    log_stdout: logs/supervisor.log
+    log_stderr: logs/supervisor.err
+
+  - name: web_server
+    entry: src/web/server.py
+    module: src.web.server
+    command: "python -m src.web.server --config config/collectors.local.yaml"
+    purpose: "aiohttp dashboard at port 8765; SSE telemetry stream; OPC UA read/write API"
+    port: 8765
+    log_stdout: logs/webserver.log
+    log_stderr: logs/webserver.err
+
+  - name: toolpath_writer
+    entry: src/toolpath/writer.py
+    module: src.toolpath.writer
+    command: "python -m src.toolpath.writer --config config/collectors.local.yaml"
+    purpose: "Records TCP XYZ positions to radian_os.toolpath_points while P_Active is true"
+    log_stdout: logs/toolpath.log
+    log_stderr: logs/toolpath.err
+
+start_stop: ".\start.ps1 [-Stop] [-Status]  (run from Data collect\ folder)"
+
+# ─────────────────────────────────────────────
+# Devices
+# ─────────────────────────────────────────────
+devices:
+  - id: chesty_kuka
+    ip: 192.168.1.44
+    port: 4840
+    protocol: OPC-UA
+    type: KUKA KRC4/KRC5 robot controller
+    cell: chesty
+
+  - id: chesty_fronius
+    ip: 192.168.1.193
+    port: 4840
+    protocol: OPC-UA
+    type: Fronius welder
+    cell: chesty
+
+  - id: mattis_kuka
+    ip: 192.168.1.151
+    port: 4840
+    protocol: OPC-UA
+    type: KUKA KRC4/KRC5 robot controller
+    cell: mattis
+
+  - id: mattis_fronius
+    ip: 192.168.1.152
+    port: 4840
+    protocol: OPC-UA
+    type: Fronius welder
+    cell: mattis
+
+  - id: esp32_cell_sensor
+    ip: 192.168.1.169
+    port: 80
+    protocol: HTTP
+    type: ESP32 sensor node
+
+  - id: schneider_plc
+    ip: 192.168.1.132
+    port: 502
+    protocol: Modbus-TCP
+    type: Schneider PLC
+
+# ─────────────────────────────────────────────
+# Database
+# ─────────────────────────────────────────────
+database:
+  engine: TimescaleDB (PostgreSQL)
+  container: radianos-db-1
+  host: localhost
+  port: 5432
+  dbname: radian_forge
+  schema: radian_os
+  tables:
+    - name: telemetry
+      type: hypertable
+      key_columns: [time, device_id, changed_key]
+      values_column: "JSONB — full snapshot of all known variables per emit"
+      schema_file: schema.sql
+    - name: toolpath_points
+      type: hypertable
+      key_columns: [time, job_id]
+      schema_file: schema_toolpath.sql
+    - name: print_jobs
+      type: regular table
+      key_columns: [id, robot_id, program_name]
+      schema_file: schema_toolpath.sql
+
+# ─────────────────────────────────────────────
+# Folder Map
+# ─────────────────────────────────────────────
+folders:
+  - path: src/collectors
+    layer: acquisition
+    purpose: "OPC UA subscription collectors (KUKA + Fronius), HTTP (ESP32), Modbus (Schneider) → asyncio.Queue"
+    key_files: [opc_collector.py, esp32_collector.py, schneider_collector.py, base.py, log_handler.py]
+    context_doc: src/collectors/CLAUDE.md
+
+  - path: src/storage
+    layer: storage
+    purpose: "BatchWriter drains asyncio.Queue → TimescaleDB; SQLite spool fallback on DB outage"
+    key_files: [writer.py, spool.py]
+    context_doc: src/storage/CLAUDE.md
+
+  - path: src/web
+    layer: presentation
+    purpose: "aiohttp dashboard — all HTML/CSS/JS inline in server.py; SSE + REST API"
+    key_files: [server.py]
+    context_doc: src/web/CLAUDE.md
+
+  - path: src/toolpath
+    layer: storage
+    purpose: "Standalone TCP position recorder; writes to toolpath_points while P_Active"
+    key_files: [writer.py]
+    context_doc: src/toolpath/CLAUDE.md
+
+  - path: src/ipc
+    layer: utility
+    purpose: "Thread-safe bounded deque for future cross-thread hot-path data flow"
+    key_files: [ring_buffer.py]
+    context_doc: src/ipc/CLAUDE.md
+
+  - path: src/hud
+    layer: presentation
+    purpose: "EMPTY — reserved for future floor HUD display process"
+    context_doc: src/hud/CLAUDE.md
+
+  - path: config
+    layer: config
+    purpose: "YAML config for all collectors, storage DSN, and toolpath settings"
+    key_files: [collectors.yaml, collectors.local.yaml, collectors.local.yaml.example, safety_bounds.yaml.example]
+    gitignored: [collectors.local.yaml, "*.pem"]
+    context_doc: config/CLAUDE.md
+
+  - path: scripts
+    layer: utility
+    purpose: "One-shot OPC UA discovery scripts; not imported by runtime"
+    key_files: [discover_kuka.py, discover_fronius.py, discovered_chesty_kuka.json]
+    context_doc: scripts/CLAUDE.md
+
+  - path: tests
+    layer: utility
+    purpose: "Network connectivity probes for all 7 devices"
+    key_files: [test_connectivity.py]
+    context_doc: tests/CLAUDE.md
+
+  - path: static
+    layer: assets
+    purpose: "Web assets: Three.js r128, brand logos, robot portraits, staff avatars"
+    context_doc: static/CLAUDE.md
+
+  - path: logs
+    layer: utility
+    purpose: "Runtime log output (gitignored)"
+    context_doc: logs/CLAUDE.md
+
+# ─────────────────────────────────────────────
+# Key Root Files
+# ─────────────────────────────────────────────
+files:
+  - path: schema.sql
+    purpose: "TimescaleDB DDL: radian_os.telemetry hypertable + kuka_state and fronius_state views; idempotent"
+
+  - path: schema_toolpath.sql
+    purpose: "DDL for radian_os.print_jobs and radian_os.toolpath_points hypertable; idempotent"
+
+  - path: start.ps1
+    purpose: "Windows start/stop/status script; uses Get-CimInstance (not Get-Process) for PS 5.1 compatibility"
+    note: "start.ps1 -Stop kills all 3 Python processes; -Status shows Docker + Python state"
+
+  - path: start.sh
+    purpose: "Linux equivalent of start.ps1 for Ubuntu/Jetson deployment"
+
+  - path: requirements.txt
+    purpose: "Python dependencies: asyncua, asyncpg, aiohttp, pymodbus, aiosqlite, pyyaml"
+
+  - path: project_map.yaml
+    purpose: "This file — machine-readable index for AI agents and development tooling"
+
+  - path: docker-compose.yml
+    purpose: "TimescaleDB container definition (at repo root, one level up from Data collect/)"
+    actual_path: "../docker-compose.yml"
+
+# ─────────────────────────────────────────────
+# Gitignored Files (never commit)
+# ─────────────────────────────────────────────
+gitignored:
+  - config/collectors.local.yaml
+  - config/client_cert.pem
+  - config/client_key.pem
+  - "*.pem"
+  - spool.db
+  - spool.db-wal
+  - spool.db-shm
+  - "logs/"
+  - "__pycache__/"
+  - "venv/"
+
+# ─────────────────────────────────────────────
+# OPC UA Writable Nodes (Edge AI Action Layer)
+# ─────────────────────────────────────────────
+# These are the KRL variables the edge AI is permitted to write via POST /api/krl-var.
+# All writes must be validated against config/safety_bounds.yaml before execution.
+# NodeIds are resolved dynamically by _krl_node_id() in src/web/server.py.
+#
+# Format: g* and c* variables → KRL Global namespace
+#         $-prefixed variables → KUKA System namespace (read-only in most cases)
+writable_nodes:
+  process_control:
+    - var: gStopCycle
+      type: bool
+      effect: "Request a clean stop at end of current seam (does not E-stop)"
+      safe_values: [true, false]
+
+    - var: gSkipLayer
+      type: bool
+      effect: "Skip the current layer and advance to the next"
+      safe_values: [true, false]
+
+    - var: gLayerRerun
+      type: bool
+      effect: "Rerun the current layer from the beginning"
+      safe_values: [true, false]
+
+    - var: gFirstSeamRerun
+      type: bool
+      effect: "Rerun only the first seam of the current layer"
+      safe_values: [true, false]
+
+    - var: gLastSeamRerun
+      type: bool
+      effect: "Rerun only the last seam of the current layer"
+      safe_values: [true, false]
+
+    - var: gInterpassCleaning
+      type: bool
+      effect: "Trigger interpass cleaning cycle"
+      safe_values: [true, false]
+
+  speed_override:
+    - var: "$OV_PRO"
+      type: int
+      unit: percent
+      effect: "Program speed override — scales all motion speeds"
+      safe_range: [10, 100]
+      default: 100
+      note: "Read-only on most KRC5 configurations; verify writability on this controller before use"
+
+  # NOTE: Fronius weld parameters (current, voltage, wire feed) are written via
+  # the Fronius OPC UA namespace, NOT via KRL variables. Those node IDs are in
+  # discovered_fronius_*.txt and are NOT yet in the writable_nodes catalog.
+  # Add them here when the Fronius write path is implemented.
+
+# ─────────────────────────────────────────────
+# Edge AI Integration Roadmap
+# ─────────────────────────────────────────────
+edge_ai_layers:
+  layer_1_context:
+    status: complete
+    description: "CLAUDE.md per folder + project_map.yaml give the edge AI a mental model of the codebase"
+
+  layer_2_observation:
+    status: planned
+    description: "Computed quality metrics in TimescaleDB: weld_quality_score, seam deviation, arc stability"
+    source: "Derive from existing telemetry rows (Fronius weld params + KUKA motion data)"
+
+  layer_3_action_api:
+    status: planned
+    description: "REST endpoints in src/web/server.py for config reads/patches and OPC UA writes"
+    endpoints:
+      - "GET /api/config — return current collectors.local.yaml as JSON"
+      - "POST /api/config — apply validated config patch + restart affected services"
+      - "POST /api/opc-write — write a single OPC UA node via KRLReader"
+      - "POST /api/restart — restart named service(s)"
+
+  layer_4_safety:
+    status: planned
+    description: "Safety bounds validation, audit log in TimescaleDB, rollback on quality drop"
+    bounds_file: "config/safety_bounds.yaml (see safety_bounds.yaml.example for structure)"
+
+  layer_5_inference:
+    status: planned
+    description: "Python agent on Jetson Orin Nano reading quality metrics and calling Action API"
+    ai_model: "Claude API (claude-sonnet-4-6) or local model"
+    context_source: "Reads project_map.yaml + relevant CLAUDE.md files as system prompt"

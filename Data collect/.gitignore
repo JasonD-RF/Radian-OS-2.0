@@ -34,6 +34,7 @@ env/
 *.swp
 *.swo
 
-# Logs
+# Logs (ignore log content but track CLAUDE.md context file)
 *.log
-logs/
+logs/*.err
+logs/*.out
