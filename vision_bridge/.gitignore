@@ -1,0 +1,47 @@
+# Privileged setup scripts — contain hardcoded sudo credentials, NEVER commit
+_install.py
+_sudo_install.py
+
+# Environment — never commit credentials or local config
+.env
+*.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# TensorRT compiled engines — hardware-specific, can be very large
+*.trt
+*.engine
+*.plan
+
+# Temporary / working files
+*.tmp
+*.log
+*.swp
+*~
+
+# ONNX models — large binary files; track the path in .env, not the file
+*.onnx
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Captured frames / recordings
+frames/
+recordings/
+*.jpg
+*.png
+*.mp4
+*.avi

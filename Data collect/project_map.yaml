@@ -176,6 +176,25 @@ folders:
     context_doc: logs/CLAUDE.md
 
 # ─────────────────────────────────────────────
+# Edge Compute Nodes
+# ─────────────────────────────────────────────
+edge_compute:
+  - id: jetson_orin_nano
+    ip: 192.168.1.230
+    port: 8765
+    user: radianjetson1
+    deploy_path: /home/radianjetson1/jetson_cam_bridge/
+    service: jetson_cam_bridge
+    repo_subfolder: "vision_bridge/"
+    purpose: "GigE Vision camera capture + TensorRT inference; future role is to close the weld quality control loop via Action API"
+    camera: "Basler acA2040-55gm GigE Vision (auto-discovered by pypylon serial)"
+    endpoints:
+      stream: "http://192.168.1.230:8765/stream"
+      health: "http://192.168.1.230:8765/health"
+      inference: "http://192.168.1.230:8765/inference"
+    context_doc: "vision_bridge/project_map.yaml"
+
+# ─────────────────────────────────────────────
 # Key Root Files
 # ─────────────────────────────────────────────
 files:
@@ -301,6 +320,14 @@ edge_ai_layers:
 
   layer_5_inference:
     status: planned
-    description: "Python agent on Jetson Orin Nano reading quality metrics and calling Action API"
-    ai_model: "Claude API (claude-sonnet-4-6) or local model"
-    context_source: "Reads project_map.yaml + relevant CLAUDE.md files as system prompt"
+    description: "Python agent on Jetson Orin Nano (192.168.1.230) reads quality metrics, runs camera inference, and calls Action API to adjust weld parameters"
+    ai_model: "Claude API (claude-sonnet-4-6) or local TensorRT model via jetson_cam_bridge"
+    context_source: "Reads project_map.yaml + relevant CLAUDE.md files as system prompt context"
+    edge_node: "192.168.1.230 — see vision_bridge/project_map.yaml for full service details"
+    action_api_url: "http://192.168.1.210:8765/api/krl-var"
+    trigger: "Inference result (weld quality score, defect flag) exceeds threshold → POST /api/krl-var"
+    control_loop:
+      - "Read latest rows from radian_os.telemetry (robot state, arc voltage, wire feed)"
+      - "GET http://192.168.1.230:8765/inference for latest camera inference result"
+      - "Evaluate quality score against safety_bounds.yaml thresholds"
+      - "POST /api/krl-var to adjust speed override, trigger interpass cleaning, or stop cycle"

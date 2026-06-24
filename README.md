@@ -1,11 +1,12 @@
-# Radian OS 2.0 — Data Collection Stack
+# Radian OS 2.0
 
-Real-time telemetry collection from KUKA KRC4/KRC5 robots and Fronius welders via OPC UA, stored in TimescaleDB and served on a live web dashboard. Built for robotic arc welding cells, with a roadmap toward closed-loop AI control from an edge computer.
+Real-time telemetry collection from KUKA KRC4/KRC5 robots and Fronius welders via OPC UA, stored in TimescaleDB and served on a live web dashboard. Includes a **Vision Bridge** edge computer (Jetson Orin Nano) for GigE Vision camera capture and TensorRT AI inference — together these form the foundation of a closed-loop weld quality control system.
 
 ---
 
 ## What it does
 
+### Data Collection Stack (`Data collect/`)
 - Connects to KUKA KRC4 and KRC5 controllers and Fronius TPS welders over OPC UA
 - Streams 60+ variables per robot (TCP position, joint angles, motion state, ArcTech globals, welder current/voltage/power)
 - Writes time-series data to TimescaleDB (PostgreSQL extension for time-series)
@@ -21,20 +22,30 @@ Real-time telemetry collection from KUKA KRC4/KRC5 robots and Fronius welders vi
 
 Adding a new robot cell requires **no code changes** — edit `collectors.local.yaml` and restart.
 
+### Vision Bridge / Edge Computer (`vision_bridge/`)
+- Runs on a **Jetson Orin Nano** (192.168.1.230) at the welding cell
+- Captures frames from a **Basler GigE Vision camera** (acA2040-55gm) at up to 30fps
+- Runs **TensorRT AI inference** on each frame (FP16, hardware-accelerated)
+- Streams live MJPEG video at `http://192.168.1.230:8765/stream`
+- Future role: evaluates weld quality in real time and posts parameter adjustments to the Action API (`POST /api/krl-var`) to close the control loop
+
+See [`vision_bridge/README.md`](vision_bridge/README.md) for full setup and deployment instructions.
+
 ---
 
 ## Network map (Radian Forge lab)
 
-| Device                  | IP              | Port | Protocol     |
-|-------------------------|-----------------|------|--------------|
-| Chesty — KUKA KRC4      | 192.168.1.44    | 4840 | OPC UA       |
-| Chesty — Fronius welder | 192.168.1.193   | 4840 | OPC UA       |
-| Mattis — KUKA KRC4      | 192.168.1.151   | 4840 | OPC UA       |
-| Mattis — Fronius welder | 192.168.1.152   | 4840 | OPC UA       |
-| ESP32 sensor (pending)  | 192.168.1.169   | 80   | HTTP/JSON    |
-| Schneider PLC (pending) | 192.168.1.132   | 502  | Modbus TCP   |
-| TimescaleDB             | localhost       | 5432 | PostgreSQL   |
-| Web dashboard           | localhost       | 8765 | HTTP         |
+| Device                           | IP              | Port | Protocol     |
+|----------------------------------|-----------------|------|--------------|
+| Chesty — KUKA KRC4               | 192.168.1.44    | 4840 | OPC UA       |
+| Chesty — Fronius welder          | 192.168.1.193   | 4840 | OPC UA       |
+| Mattis — KUKA KRC4               | 192.168.1.151   | 4840 | OPC UA       |
+| Mattis — Fronius welder          | 192.168.1.152   | 4840 | OPC UA       |
+| ESP32 sensor (pending)           | 192.168.1.169   | 80   | HTTP/JSON    |
+| Schneider PLC (pending)          | 192.168.1.132   | 502  | Modbus TCP   |
+| **Jetson Orin Nano** (Vision Bridge) | **192.168.1.230** | **8765** | **HTTP / MJPEG** |
+| TimescaleDB                      | localhost       | 5432 | PostgreSQL   |
+| Web dashboard                    | localhost       | 8765 | HTTP         |
 
 ---
 
@@ -229,15 +240,23 @@ The root `Data collect/config/safety_bounds.yaml.example` defines the allowed pa
 
 ## Edge AI roadmap
 
-Radian OS is designed to evolve into a closed-loop system where an AI agent on an edge computer (Jetson Orin Nano) observes process state and makes real-time parameter adjustments.
+Radian OS is designed to evolve into a closed-loop system where the Jetson Orin Nano edge computer observes the welding process through the Vision Bridge camera and makes real-time parameter adjustments via the Action API.
 
 | Layer | Status | Description |
 |---|---|---|
-| **1 — Context** | ✅ Complete | `CLAUDE.md` per folder + `project_map.yaml` give the AI a mental model of the codebase |
+| **1 — Context** | ✅ Complete | `CLAUDE.md` per folder + `project_map.yaml` in both `Data collect/` and `vision_bridge/` give AI a full mental model of both codebases |
 | **2 — Observation** | Planned | Computed quality metrics in TimescaleDB: weld quality score, seam deviation, arc stability |
-| **3 — Action API** | Planned | REST endpoints for config patching, OPC UA writes, and service restarts |
+| **3 — Action API** | Planned | REST endpoints in `src/web/server.py` for config patching, OPC UA writes, and service restarts |
 | **4 — Safety** | Planned | Parameter bounds validation (`safety_bounds.yaml`), audit log in DB, rollback on quality drop |
-| **5 — Inference** | Planned | Python agent on Jetson reads quality metrics, calls Action API; uses Claude API or local model |
+| **5 — Inference** | Planned | Jetson (192.168.1.230) reads quality metrics + camera frames → inference → `POST /api/krl-var` to adjust robot/welder in real time |
+
+**How the control loop will work (Layer 5):**
+```
+Basler camera → Vision Bridge inference → quality score
+  └─► if threshold exceeded → POST /api/krl-var on this server
+        └─► KRLReader writes OPC UA node on KUKA controller
+              └─► Robot/welder parameter adjusted in real time
+```
 
 The existing `POST /api/krl-var` endpoint in `src/web/server.py` is the seed of Layer 3 — it already supports OPC UA writes to KUKA KRL variables. The full Action API will extend this with config management and safety validation.
 
@@ -249,6 +268,18 @@ The existing `POST /api/krl-var` endpoint in `src/web/server.py` is the seed of 
 radian OS 2_0/
 ├── docker-compose.yml              # TimescaleDB container definition
 ├── README.md                       # this file
+├── vision_bridge/                  # Jetson Orin Nano edge computer (see vision_bridge/README.md)
+│   ├── README.md                   # Jetson setup, endpoints, deployment guide
+│   ├── main.py                     # FastAPI app factory
+│   ├── api.py                      # HTTP/WebSocket routes
+│   ├── project_map.yaml            # Machine-readable index for Vision Bridge
+│   ├── .env.example                # Config template
+│   ├── jetson_cam_bridge.service   # systemd unit
+│   ├── install.sh                  # One-time Jetson setup
+│   ├── camera/                     # GigE Vision drivers (Basler pypylon, Aravis)
+│   ├── inference/                  # TensorRT engine + capture/inference pipeline
+│   │   └── tasks/                  # Pluggable AI task interface
+│   └── streaming/                  # MJPEG single-encode broadcaster
 └── Data collect/
     ├── CLAUDE.md                   # AI context: project root
     ├── project_map.yaml            # Machine-readable index of all files, devices, and writable nodes

@@ -1,0 +1,29 @@
+# jetson_cam_bridge — Python dependencies
+#
+# Install with:
+#   pip install -r requirements.txt
+#
+# TensorRT, PyCUDA, and pypylon are NOT pip-installable on all platforms.
+# See install.sh for the correct Jetson-specific install commands.
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+
+# ── Image processing ─────────────────────────────────────────────────────────
+# Use headless build — no GUI windows on the Jetson edge node.
+opencv-python-headless>=4.9.0
+
+# ── Numerics ─────────────────────────────────────────────────────────────────
+numpy>=1.24.0
+
+# ── HTTP client (for optional result push to Radian Forge) ───────────────────
+httpx>=0.27.0
+
+# ── Config / environment ─────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── Optional / installed separately on Jetson ────────────────────────────────
+# pypylon       — Basler pylon SDK Python binding (installed via SDK deb + pip)
+# tensorrt      — TensorRT Python API (installed via apt on JetPack 6)
+# pycuda        — PyCUDA for GPU buffer management (installed via apt on JetPack 6)

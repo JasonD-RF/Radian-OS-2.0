@@ -1,0 +1,30 @@
+[Unit]
+Description=Jetson Camera Bridge — GigE Vision capture + TensorRT inference
+# Wait for the network to be up (camera is on the same GigE NIC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run as the normal user, not root
+User=radianjetson1
+WorkingDirectory=/home/radianjetson1/jetson_cam_bridge
+
+# Load all config from .env (CAMERA_PROVIDER, BRIDGE_PORT, etc.)
+EnvironmentFile=/home/radianjetson1/jetson_cam_bridge/.env
+
+# Use the virtualenv Python so all pip dependencies are available
+ExecStart=/home/radianjetson1/jetson_cam_bridge/venv/bin/python main.py
+
+# Restart automatically on crash; wait 3 s before each retry
+Restart=always
+RestartSec=3
+
+# Write stdout/stderr to the systemd journal (view with: journalctl -u jetson_cam_bridge -f)
+StandardOutput=journal
+StandardError=journal
+
+# Give the camera connection time to settle on startup
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

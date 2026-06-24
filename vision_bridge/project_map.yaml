@@ -1,0 +1,198 @@
+# Vision Bridge / Edge Computer — Project Map
+# Machine-readable index for AI-assisted development and edge AI agents.
+# Read this file first to orient in the codebase before reading individual CLAUDE.md files.
+
+project: "Vision Bridge / Edge Computer"
+root: "vision_bridge/"
+repo: "JasonD-RF/Radian-OS-2.0"
+description: "Edge compute service running on a Jetson Orin Nano. Captures GigE Vision camera frames, runs TensorRT AI inference, and streams MJPEG video. Future role: close the weld quality control loop by calling the Radian OS 2.0 Action API."
+
+# ─────────────────────────────────────────────
+# Deployment
+# ─────────────────────────────────────────────
+deployment:
+  host: 192.168.1.230
+  user: radianjetson1
+  path: /home/radianjetson1/jetson_cam_bridge/
+  service: jetson_cam_bridge
+  port: 8765
+  dev_run: "python main.py"
+  production_start: "sudo systemctl start jetson_cam_bridge"
+  logs: "journalctl -u jetson_cam_bridge -f"
+  scp_deploy: "scp -r camera/ inference/ streaming/ main.py api.py requirements.txt radianjetson1@192.168.1.230:/home/radianjetson1/jetson_cam_bridge/"
+
+# ─────────────────────────────────────────────
+# Runtime Process (single uvicorn process)
+# ─────────────────────────────────────────────
+processes:
+  - name: jetson_cam_bridge
+    entry: main.py
+    command: "python main.py"
+    purpose: "FastAPI/uvicorn server; orchestrates camera capture, inference pipeline, and MJPEG broadcast"
+    port: 8765
+
+# ─────────────────────────────────────────────
+# HTTP Endpoints
+# ─────────────────────────────────────────────
+endpoints:
+  - path: /stream
+    method: GET
+    type: MJPEG multipart
+    purpose: "Continuous MJPEG video stream; single JPEG encode fanned to all connected clients"
+
+  - path: /snapshot
+    method: GET
+    type: JPEG image
+    purpose: "Single latest frame as JPEG"
+
+  - path: /inference
+    method: GET
+    type: JSON
+    purpose: "Latest inference result from InferenceWorker (postprocess() output)"
+
+  - path: /ws
+    method: WebSocket
+    type: binary frames
+    purpose: "Push inference results and frames to WebSocket clients"
+
+  - path: /health
+    method: GET
+    type: JSON
+    purpose: "Service metrics: FPS, subscriber count, last encode time, inference latency"
+
+  - path: /config
+    method: GET/POST
+    type: JSON
+    purpose: "Read or patch runtime settings (JPEG quality, inference enabled, etc.)"
+
+# ─────────────────────────────────────────────
+# Hardware
+# ─────────────────────────────────────────────
+hardware:
+  compute: "Jetson Orin Nano (8GB, 40 TOPS AI performance)"
+  camera: "Basler acA2040-55gm GigE Vision (2048x2048, ~30fps at full res)"
+  camera_ip: "Auto-discovered by pypylon serial number"
+  nic: "enP8p1s0 — dedicated GigE NIC for camera (1000Mb/s full duplex)"
+  camera_bandwidth: "~576 Mbps inbound from Basler at 30fps full resolution"
+  mtu: 9000  # Jumbo frames for GigE Vision; set by install.sh
+
+# ─────────────────────────────────────────────
+# Folder Map
+# ─────────────────────────────────────────────
+folders:
+  - path: camera/
+    layer: acquisition
+    purpose: "Pluggable GigE Vision camera drivers; factory selects driver from CAMERA_PROVIDER env var"
+    key_files: [__init__.py, basler_pylon.py, aravis.py, base.py]
+    context_doc: camera/CLAUDE.md
+
+  - path: inference/
+    layer: inference
+    purpose: "TensorRT engine wrapper and capture/inference worker threads; ring buffer decoupling"
+    key_files: [engine.py, pipeline.py]
+    context_doc: inference/CLAUDE.md
+
+  - path: inference/tasks/
+    layer: inference
+    purpose: "Pluggable model task interface (preprocess/postprocess per model type)"
+    key_files: [__init__.py, base.py, passthrough.py]
+    context_doc: inference/tasks/CLAUDE.md
+
+  - path: streaming/
+    layer: presentation
+    purpose: "Single-encode MJPEG fan-out broadcaster for HTTP /stream clients"
+    key_files: [broadcaster.py]
+    context_doc: streaming/CLAUDE.md
+
+# ─────────────────────────────────────────────
+# Key Root Files
+# ─────────────────────────────────────────────
+files:
+  - path: main.py
+    purpose: "App factory; wires camera provider, TRT engine, inference pipeline, MJPEG broadcaster; runs uvicorn"
+
+  - path: api.py
+    purpose: "All FastAPI routes; injects shared objects (pipeline, broadcaster, engine) from app.state"
+
+  - path: requirements.txt
+    purpose: "Python dependencies: FastAPI, uvicorn, opencv-python-headless, numpy, httpx, python-dotenv"
+
+  - path: .env.example
+    purpose: "Template for all runtime config; copy to .env and fill in values"
+
+  - path: jetson_cam_bridge.service
+    purpose: "systemd unit; auto-restart (3s), runs as radianjetson1, loads .env"
+
+  - path: install.sh
+    purpose: "One-time Jetson setup: jumbo frames (MTU 9000), TRT pip bindings, venv, systemd install"
+
+  - path: project_map.yaml
+    purpose: "This file — machine-readable index for AI agents and development tooling"
+
+# ─────────────────────────────────────────────
+# Configuration (via .env)
+# ─────────────────────────────────────────────
+config_env_vars:
+  camera:
+    CAMERA_PROVIDER: "basler_pylon | aravis"
+    CAMERA_SERIAL: "Basler serial number (auto-discovery if blank)"
+    CAMERA_WIDTH: "Frame width in pixels"
+    CAMERA_HEIGHT: "Frame height in pixels"
+    CAMERA_FPS_LIMIT: "Max frames per second"
+    CAMERA_EXPOSURE_US: "Exposure time in microseconds"
+    CAMERA_GAIN: "Analog gain"
+    CAMERA_PACKET_SIZE: "GigE Vision packet size (bytes); 1400 for non-jumbo, 8192 for jumbo"
+  inference:
+    TASK_CLASS: "passthrough | weld_monitor | (future custom tasks)"
+    ENGINE_PATH: "Path to compiled .trt engine file"
+    ONNX_PATH: "Path to ONNX model (compiled to .trt on first run)"
+    INFERENCE_FP16: "true | false — FP16 precision (2x faster on Orin Nano)"
+  bridge:
+    BRIDGE_HOST: "0.0.0.0"
+    BRIDGE_PORT: "8765"
+    STREAM_JPEG_QUALITY: "JPEG quality 0-100 (default ~85)"
+    RING_BUFFER_CAPACITY: "Frame buffer depth between capture and inference threads"
+  integration:
+    RADIAN_FORGE_URL: "http://192.168.1.210:8765 — Radian OS 2.0 Action API base URL"
+    PUSH_INTERVAL_S: "Seconds between inference result pushes to Radian OS 2.0"
+
+# ─────────────────────────────────────────────
+# Gitignored Files (never commit)
+# ─────────────────────────────────────────────
+gitignored:
+  - .env
+  - "*.trt"
+  - "*.engine"
+  - __pycache__/
+  - venv/
+
+# ─────────────────────────────────────────────
+# Integration with Radian OS 2.0
+# ─────────────────────────────────────────────
+integration:
+  radian_os_2:
+    host: "192.168.1.210"
+    web_server_port: 8765
+    timescaledb_port: 5432
+    role: "Downstream control target — Jetson inference results trigger OPC UA writes"
+    data_flow:
+      - "Jetson reads radian_os.telemetry from TimescaleDB to get robot state + weld params"
+      - "Jetson inference result (weld quality score, defect detection) evaluated against thresholds"
+      - "On threshold breach: POST http://192.168.1.210:8765/api/krl-var to adjust KUKA/Fronius params"
+    action_api:
+      write_endpoint: "POST /api/krl-var"
+      read_endpoint: "GET /api/krl-var"
+      writable_vars: "See Radian OS 2.0 project_map.yaml → writable_nodes for full list"
+
+# ─────────────────────────────────────────────
+# Edge AI Roadmap (Jetson role)
+# ─────────────────────────────────────────────
+edge_ai_role:
+  current_status: "Camera capture and streaming operational; inference pipeline built with passthrough task"
+  next_step: "Implement weld_monitor task using ONNX model for seam tracking / defect detection"
+  control_loop:
+    step_1: "Read latest telemetry from TimescaleDB (robot state, arc voltage, wire feed)"
+    step_2: "Run inference on current camera frame"
+    step_3: "Compute quality score or detect anomaly"
+    step_4: "POST /api/krl-var on Radian OS 2.0 to adjust parameters (speed override, interpass clean, etc.)"
+    step_5: "Log result to TimescaleDB for audit trail"

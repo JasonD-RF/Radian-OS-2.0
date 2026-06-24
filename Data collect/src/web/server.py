@@ -657,12 +657,23 @@ const ANALOG_KEYS = new Set([
 // Minimum change required to update an analog cell (degrees / mm / RPM)
 const DEADBAND = 0.05;
 
+// Per-key value → human label overrides (used by fmtCell in renderTable)
+const VALUE_LABELS = {
+  operational_mode: {1: 'T1', 2: 'T2', 3: 'AUTO', 4: 'AUT EXT'},
+};
+
 function fmt(v) {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'boolean') return v ? 'true' : 'false';
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
+}
+
+function fmtCell(k, v) {
+  const map = VALUE_LABELS[k];
+  if (map && v !== null && v !== undefined) return map[v] ?? fmt(v);
+  return fmt(v);
 }
 
 function vClass(v) {
@@ -682,7 +693,7 @@ function renderTable(deviceId, values, changedKey) {
     tbl.innerHTML = rows.map(([k, label]) => {
       const v = values[k];
       if (typeof v === 'number') lastNum[deviceId + ':' + k] = v;
-      return `<tr data-key="${k}"><td>${label}</td><td class="${vClass(v)}">${fmt(v)}</td></tr>`;
+      return `<tr data-key="${k}"><td>${label}</td><td class="${vClass(v)}">${fmtCell(k, v)}</td></tr>`;
     }).join('');
     return;
   }
@@ -705,7 +716,7 @@ function renderTable(deviceId, values, changedKey) {
       cell.className   = vClass(v);
     } else {
       // For state/discrete keys: exact string comparison, flash on change.
-      const text = fmt(v);
+      const text = fmtCell(k, v);
       if (cell.textContent === text) continue;
       cell.textContent = text;
       cell.className   = vClass(v);

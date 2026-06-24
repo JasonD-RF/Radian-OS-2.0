@@ -48,3 +48,4 @@ gitignored:
 - `config/safety_bounds.yaml.example` defines the allowed parameter ranges for any AI-initiated OPC UA writes.
 - The Action API (Layer 3, future) will be exposed from `src/web/server.py` at `/api/config`, `/api/opc-write`, and `/api/restart`.
 - `ai_control_enabled` flag in `collectors.local.yaml` (future) will gate all AI-initiated writes.
+- Jetson edge node at 192.168.1.230 runs `jetson_cam_bridge` (local source: `C:\Users\thatb\jetson_files\`). When the inference layer is active, it will POST to `/api/krl-var` on this web server to adjust KUKA/Fronius weld parameters based on live camera analysis. See `edge_compute` section in `project_map.yaml` for full details.
